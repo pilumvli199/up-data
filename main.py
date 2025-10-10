@@ -6,7 +6,6 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from mpl_finance import candlestick_ohlc
 import matplotlib.dates as mdates
 import pandas as pd
 from dotenv import load_dotenv
