@@ -347,9 +347,12 @@ def main():
         application.add_handler(CommandHandler("optionchain", optionchain_command))
         application.add_handler(CommandHandler("help", help_command))
         
-        # Start bot
+        # Start bot with drop_pending_updates to avoid conflicts
         logger.info("🚀 Bot started successfully!")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
         
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
