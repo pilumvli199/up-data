@@ -334,28 +334,58 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Help command"""
     await start(update, context)
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Handle errors"""
+    logger.error(f"Exception while handling an update: {context.error}")
+
 def main():
     """Start the bot"""
     try:
-        # Create application
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        # Validate token
+        if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == 'your_telegram_bot_token_here':
+            logger.error("❌ TELEGRAM_BOT_TOKEN not set properly!")
+            return
         
-        # Add handlers
+        logger.info("🔄 Initializing bot...")
+        
+        # Create application with retry settings
+        application = (
+            Application.builder()
+            .token(TELEGRAM_BOT_TOKEN)
+            .connect_timeout(30)
+            .read_timeout(30)
+            .write_timeout(30)
+            .pool_timeout(30)
+            .build()
+        )
+        
+        # Add error handler
+        application.add_error_handler(error_handler)
+        
+        # Add command handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("nifty", nifty_command))
         application.add_handler(CommandHandler("chart", chart_command))
         application.add_handler(CommandHandler("optionchain", optionchain_command))
         application.add_handler(CommandHandler("help", help_command))
         
-        # Start bot with drop_pending_updates to avoid conflicts
+        # Start bot with conflict resolution
         logger.info("🚀 Bot started successfully!")
+        logger.info("⚠️  If you see conflict errors, please:")
+        logger.info("   1. Stop all other bot instances")
+        logger.info("   2. Wait 2-3 minutes")
+        logger.info("   3. Or reset bot token via @BotFather")
+        
         application.run_polling(
             allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
+            drop_pending_updates=True,
+            poll_interval=2.0,
+            timeout=10
         )
         
     except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
+        logger.error(f"❌ Failed to start bot: {e}")
+        logger.error("💡 Try resetting bot token via @BotFather")
 
 if __name__ == '__main__':
     main()
