@@ -9,6 +9,7 @@ import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
 import io
 from dotenv import load_dotenv
+from aiohttp import web
 
 # Load environment variables
 load_dotenv()
@@ -25,6 +26,8 @@ UPSTOX_API_KEY = os.getenv('UPSTOX_API_KEY')
 UPSTOX_ACCESS_TOKEN = os.getenv('UPSTOX_ACCESS_TOKEN')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+PORT = int(os.getenv('PORT', 8080))
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')  # Your Railway app URL
 
 NIFTY_INSTRUMENT_KEY = "NSE_INDEX|Nifty 50"
 BASE_URL = "https://api.upstox.com/v2"
@@ -338,26 +341,22 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Handle errors"""
     logger.error(f"Exception while handling an update: {context.error}")
 
+async def health_check(request):
+    """Health check endpoint for Railway"""
+    return web.Response(text="Bot is running!")
+
 def main():
-    """Start the bot"""
+    """Start the bot with webhook"""
     try:
         # Validate token
         if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == 'your_telegram_bot_token_here':
             logger.error("❌ TELEGRAM_BOT_TOKEN not set properly!")
             return
         
-        logger.info("🔄 Initializing bot...")
+        logger.info("🔄 Initializing bot with WEBHOOK mode...")
         
-        # Create application with retry settings
-        application = (
-            Application.builder()
-            .token(TELEGRAM_BOT_TOKEN)
-            .connect_timeout(30)
-            .read_timeout(30)
-            .write_timeout(30)
-            .pool_timeout(30)
-            .build()
-        )
+        # Create application
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
         
         # Add error handler
         application.add_error_handler(error_handler)
@@ -369,23 +368,35 @@ def main():
         application.add_handler(CommandHandler("optionchain", optionchain_command))
         application.add_handler(CommandHandler("help", help_command))
         
-        # Start bot with conflict resolution
-        logger.info("🚀 Bot started successfully!")
-        logger.info("⚠️  If you see conflict errors, please:")
-        logger.info("   1. Stop all other bot instances")
-        logger.info("   2. Wait 2-3 minutes")
-        logger.info("   3. Or reset bot token via @BotFather")
-        
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-            poll_interval=2.0,
-            timeout=10
-        )
+        # Setup webhook
+        if WEBHOOK_URL:
+            webhook_path = f"/telegram{TELEGRAM_BOT_TOKEN}"
+            webhook_full_url = f"{WEBHOOK_URL}{webhook_path}"
+            
+            logger.info(f"🌐 Setting webhook to: {webhook_full_url}")
+            
+            # Start webhook
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=PORT,
+                webhook_url=webhook_full_url,
+                url_path=webhook_path,
+                drop_pending_updates=True
+            )
+        else:
+            # Fallback to polling if webhook not configured
+            logger.info("⚠️ WEBHOOK_URL not set, using polling mode...")
+            logger.info("🚀 Bot started in POLLING mode!")
+            
+            application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                poll_interval=3.0,
+                timeout=10
+            )
         
     except Exception as e:
         logger.error(f"❌ Failed to start bot: {e}")
-        logger.error("💡 Try resetting bot token via @BotFather")
 
 if __name__ == '__main__':
     main()
