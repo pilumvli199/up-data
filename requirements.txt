@@ -2,5 +2,4 @@ python-telegram-bot==21.5
 requests==2.31.0
 pandas==2.1.4
 matplotlib==3.8.2
-mplfinance==0.12.10b0
 python-dotenv==1.0.0
