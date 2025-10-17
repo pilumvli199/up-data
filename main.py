@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # main.py - UPSTOX MARKET DATA BOT (FULL, robust)
-# Save as main.py and run. Make sure environment variables are set:
-# UPSTOX_ACCESS_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+# Save as main.py and run. Set env vars: UPSTOX_ACCESS_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 import os
 import io
@@ -82,7 +81,6 @@ def http_get(url, headers=None, params=None, timeout=12, retries=3, backoff=1.5)
         try:
             resp = requests.get(url, headers=headers or {"Accept":"application/json"}, params=params, timeout=timeout)
             if not resp.ok:
-                # print helpful info
                 try:
                     safe_print_response(resp)
                 except:
@@ -157,18 +155,18 @@ def resample_to_5min(candles_1min):
         print("  Error resampling:", e)
         return []
 
-# ======================== INTRADAY/HISTORICAL (robust) ========================
+# ======================== INTRADAY/HISTORICAL (correct endpoints) ========================
 
 def get_intraday_candles(instrument_key):
     """
-    Tries:
-      1) Path-style: /v2/historical-candle/{encoded_key}/1minute
-      2) Query-style fallback: /v2/historical-candle?instrument_key=...&interval=1minute
+    Use intraday endpoint for current trading day:
+    /v2/historical-candle/intraday/{instrumentKey}/{interval}
+    Fallback to query-style if needed.
     """
     try:
         encoded_key = urllib.parse.quote(instrument_key, safe='')
-        url_path = f"{BASE_URL}/v2/historical-candle/{encoded_key}/1minute"
-        data = http_get(url_path, headers={"Accept":"application/json"}, timeout=10, retries=2)
+        url_intraday = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
+        data = http_get(url_intraday, headers={"Accept":"application/json"}, timeout=10, retries=2)
         candles_1min = None
         if data:
             if isinstance(data, dict):
@@ -183,10 +181,11 @@ def get_intraday_candles(instrument_key):
         if candles_1min:
             return resample_to_5min(candles_1min)[:500]
 
-        print("  Path-style intraday failed or empty — trying query-style...")
-        url_query = f"{BASE_URL}/v2/historical-candle"
-        params = {"instrument_key": instrument_key, "interval":"1minute"}
-        data2 = http_get(url_query, headers=HEADERS, params=params, timeout=12, retries=2)
+        # fallback: try query-style intraday/historical
+        print("  Intraday path returned empty — trying query-style intraday fallback...")
+        url_query = f"{BASE_URL}/v2/historical-candle/intraday"
+        params = {"instrument_key": instrument_key, "interval": "1minute"}
+        data2 = http_get(url_query, headers=HEADERS, params=params, timeout=10, retries=2)
         if not data2:
             return []
         if isinstance(data2, dict):
@@ -202,12 +201,14 @@ def get_intraday_candles(instrument_key):
             return resample_to_5min(candles_1min)[:500]
         return []
     except Exception as e:
-        print("  Error fetching intraday candles:", e)
+        print(f"  Error fetching intraday candles: {e}")
         return []
 
 def get_historical_candles(instrument_key, interval="1minute", days=5):
     """
-    Tries path-style with from/to and query-style fallback.
+    Historical range path ordering: /v2/historical-candle/{instrumentKey}/{interval}/{to_date}/{from_date}
+    (note: to_date then from_date)
+    Fallback to query-style if needed.
     """
     try:
         now_ist = get_ist_now()
@@ -215,7 +216,7 @@ def get_historical_candles(instrument_key, interval="1minute", days=5):
         from_date = (now_ist - timedelta(days=days)).strftime('%Y-%m-%d')
 
         encoded_key = urllib.parse.quote(instrument_key, safe='')
-        url_path = f"{BASE_URL}/v2/historical-candle/{encoded_key}/1minute/{from_date}/{to_date}"
+        url_path = f"{BASE_URL}/v2/historical-candle/{encoded_key}/1minute/{to_date}/{from_date}"
         data = http_get(url_path, headers={"Accept":"application/json"}, timeout=15, retries=3)
         candles_1min = None
         if data:
@@ -231,9 +232,9 @@ def get_historical_candles(instrument_key, interval="1minute", days=5):
         if candles_1min:
             return resample_to_5min(candles_1min)[:500]
 
-        print("  Path-style historical failed — trying query-style...")
+        print("  Path-style historical failed — trying query-style (with to_date/from_date params)...")
         url_query = f"{BASE_URL}/v2/historical-candle"
-        params = {"instrument_key": instrument_key, "interval":"1minute", "from_date": from_date, "to_date": to_date}
+        params = {"instrument_key": instrument_key, "interval":"1minute", "to_date": to_date, "from_date": from_date}
         data2 = http_get(url_query, headers=HEADERS, params=params, timeout=15, retries=3)
         if not data2:
             return []
@@ -250,7 +251,7 @@ def get_historical_candles(instrument_key, interval="1minute", days=5):
             return resample_to_5min(candles_1min)[:500]
         return []
     except Exception as e:
-        print("  Error fetching historical candles:", e)
+        print(f"  Error fetching historical candles: {e}")
         return []
 
 # ======================== OPTION CHAIN & GREEKS ========================
@@ -686,6 +687,8 @@ async def main():
     print("\n" + "="*60)
     print(f"✅ COMPLETED! {successful_charts} charts sent")
     print("="*60 + "\n")
+
+# ======================== ENTRYPOINT ========================
 
 if __name__ == "__main__":
     print("🔧 Checking dependencies...")
