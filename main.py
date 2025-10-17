@@ -11,7 +11,6 @@ import os
 import time
 
 # ======================== CONFIGURATION ========================
-# Get from environment variables (set in Railway/Docker)
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN", "your_access_token")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "your_telegram_bot_token")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "your_telegram_chat_id")
@@ -24,14 +23,12 @@ HEADERS = {
 }
 
 # ======================== INSTRUMENT KEYS ========================
-# Correct instrument keys for Nifty 50 stocks
 NIFTY_50_STOCKS = {
     "HDFCBANK": "NSE_EQ|INE040A01034",
     "RELIANCE": "NSE_EQ|INE002A01018",
-    "TATAMOTORS": "NSE_EQ|INE155A01022",
+    "TCS": "NSE_EQ|INE467B01029",
     "INFY": "NSE_EQ|INE009A01021",
     "ICICIBANK": "NSE_EQ|INE090A01021",
-    "TCS": "NSE_EQ|INE467B01029",
     "BHARTIARTL": "NSE_EQ|INE397D01024",
     "HINDUNILVR": "NSE_EQ|INE030A01027",
     "ITC": "NSE_EQ|INE154A01025",
@@ -45,44 +42,50 @@ NIFTY_50_STOCKS = {
     "SUNPHARMA": "NSE_EQ|INE044A01036",
     "TITAN": "NSE_EQ|INE280A01028",
     "ULTRACEMCO": "NSE_EQ|INE481G01011",
-    "NESTLEIND": "NSE_EQ|INE239A01016"
+    "NESTLEIND": "NSE_EQ|INE239A01016",
+    "TATAMOTORS": "NSE_EQ|INE155A01022"
 }
 
 NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
 
 # ======================== HELPER FUNCTIONS ========================
 
-def get_intraday_candles(instrument_key, interval="5minute"):
+def get_historical_candles_v3(instrument_key, interval="5", unit="minute", days=5):
     """
-    Fetch intraday candle data (current trading day)
-    No authentication required for intraday API!
-    """
-    try:
-        url = f"{BASE_URL}/v2/historical-candle/intraday/{instrument_key}/{interval}"
-        
-        # For intraday, no auth needed
-        response = requests.get(url, headers={"Accept": "application/json"})
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        if data.get('status') == 'success' and 'data' in data and 'candles' in data['data']:
-            candles = data['data']['candles']
-            return candles[:500] if len(candles) > 500 else candles
-        return []
-    except Exception as e:
-        print(f"Error fetching intraday candles for {instrument_key}: {str(e)}")
-        return []
-
-def get_historical_candles_v2(instrument_key, days_back=5):
-    """
-    Fetch last 5 days historical data using V2 API
+    Fetch historical candles using V3 API (supports 5 minute interval!)
+    interval: 1, 5, 10, 15, 30 (for minutes)
+    unit: minute, day, week, month
     """
     try:
         to_date = datetime.now().strftime('%Y-%m-%d')
-        from_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+        from_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
         
-        url = f"{BASE_URL}/v2/historical-candle/{instrument_key}/5minute/{to_date}/{from_date}"
+        # V3 API endpoint
+        url = f"{BASE_URL}/v3/historical-candle/{instrument_key}/{interval}/{unit}/{to_date}/{from_date}"
+        
+        response = requests.get(url, headers={"Accept": "application/json"})
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get('status') == 'success' and 'data' in data and 'candles' in data['data']:
+            candles = data['data']['candles']
+            # Limit to 500 candles
+            return candles[:500] if len(candles) > 500 else candles
+        return []
+    except Exception as e:
+        print(f"Error fetching V3 candles for {instrument_key}: {str(e)}")
+        return []
+
+def get_intraday_candles_v3(instrument_key, interval="5", unit="minute"):
+    """
+    Fetch intraday candles using V3 Intraday API (current day only)
+    interval: 1, 5, 10, 15, 30
+    unit: minute
+    """
+    try:
+        # V3 Intraday API endpoint
+        url = f"{BASE_URL}/v3/historical-candle/intraday/{instrument_key}/{interval}/{unit}"
         
         response = requests.get(url, headers={"Accept": "application/json"})
         response.raise_for_status()
@@ -94,21 +97,36 @@ def get_historical_candles_v2(instrument_key, days_back=5):
             return candles[:500] if len(candles) > 500 else candles
         return []
     except Exception as e:
-        print(f"Error fetching historical candles: {str(e)}")
+        print(f"Error fetching intraday V3 candles: {str(e)}")
         return []
 
-def get_next_expiry():
-    """Get next Thursday expiry date for options"""
-    today = datetime.now()
-    days_ahead = 3 - today.weekday()  # Thursday is 3
-    if days_ahead <= 0:
-        days_ahead += 7
-    next_thursday = today + timedelta(days_ahead)
-    return next_thursday.strftime('%Y-%m-%d')
+def get_market_quote(instrument_keys):
+    """
+    Get real-time market quotes using V3 API
+    Max 500 instruments per request
+    """
+    try:
+        url = f"{BASE_URL}/v3/market-quote/quotes"
+        
+        params = {
+            "instrument_key": ",".join(instrument_keys[:500])
+        }
+        
+        response = requests.get(url, headers={"Accept": "application/json"}, params=params)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get('status') == 'success':
+            return data.get('data', {})
+        return {}
+    except Exception as e:
+        print(f"Error fetching market quotes: {str(e)}")
+        return {}
 
 def get_option_chain_data():
     """
-    Fetch option chain data using option chain API
+    Fetch option chain data
     """
     try:
         expiry_date = get_next_expiry()
@@ -131,32 +149,16 @@ def get_option_chain_data():
         print(f"Error fetching option chain: {str(e)}")
         return []
 
-def get_option_greeks(instrument_keys):
-    """
-    Fetch option Greeks data (Delta, Theta, Vega, Gamma)
-    Max 50 instruments per request
-    """
-    try:
-        url = f"{BASE_URL}/v2/option/greek"
-        
-        # Join instrument keys with comma
-        params = {
-            "instrument_key": ",".join(instrument_keys[:50])  # Max 50
-        }
-        
-        response = requests.get(url, headers=HEADERS, params=params)
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        if data.get('status') == 'success':
-            return data.get('data', {})
-        return {}
-    except Exception as e:
-        print(f"Error fetching option Greeks: {str(e)}")
-        return {}
+def get_next_expiry():
+    """Get next Thursday expiry date"""
+    today = datetime.now()
+    days_ahead = 3 - today.weekday()
+    if days_ahead <= 0:
+        days_ahead += 7
+    next_thursday = today + timedelta(days_ahead)
+    return next_thursday.strftime('%Y-%m-%d')
 
-def create_candlestick_chart(candles, title):
+def create_candlestick_chart(candles, title, show_volume=False):
     """
     Create TradingView style candlestick chart
     candles format: [[timestamp, open, high, low, close, volume, oi], ...]
@@ -165,57 +167,77 @@ def create_candlestick_chart(candles, title):
         return None
     
     try:
-        # Convert to DataFrame
-        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+        # Handle different candle formats
+        if len(candles[0]) >= 6:
+            cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi']
+        else:
+            cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        
+        df = pd.DataFrame(candles, columns=cols[:len(candles[0])])
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.sort_values('timestamp').reset_index(drop=True)
         
-        # Create figure with white background
-        fig, ax = plt.subplots(figsize=(16, 8), facecolor='white')
-        ax.set_facecolor('white')
+        # Create figure
+        if show_volume and 'volume' in df.columns:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10), 
+                                          facecolor='white', 
+                                          gridspec_kw={'height_ratios': [3, 1]})
+        else:
+            fig, ax1 = plt.subplots(figsize=(16, 8), facecolor='white')
+            ax2 = None
+        
+        ax1.set_facecolor('white')
         
         # Plot candlesticks
         for idx, row in df.iterrows():
-            # TradingView colors: Green for bullish, Red for bearish
             color = '#26a69a' if row['close'] >= row['open'] else '#ef5350'
             
-            # Draw candlestick body
             height = abs(row['close'] - row['open'])
             bottom = min(row['open'], row['close'])
             
-            if height == 0:  # Doji candle
+            if height == 0:
                 height = 0.01
             
-            # Body rectangle
+            # Body
             rect = mpatches.Rectangle((idx - 0.3, bottom), 0.6, height, 
                                       facecolor=color, edgecolor=color, linewidth=1.5)
-            ax.add_patch(rect)
+            ax1.add_patch(rect)
             
-            # Wick lines
-            ax.plot([idx, idx], [row['low'], row['high']], 
-                   color=color, linewidth=1.2, solid_capstyle='round')
+            # Wick
+            ax1.plot([idx, idx], [row['low'], row['high']], 
+                    color=color, linewidth=1.2, solid_capstyle='round')
         
         # Formatting
-        ax.set_xlim(-1, len(df))
+        ax1.set_xlim(-1, len(df))
         y_margin = (df['high'].max() - df['low'].min()) * 0.05
-        ax.set_ylim(df['low'].min() - y_margin, df['high'].max() + y_margin)
+        ax1.set_ylim(df['low'].min() - y_margin, df['high'].max() + y_margin)
         
-        ax.set_title(title, fontsize=16, fontweight='bold', pad=20, color='#333')
-        ax.set_xlabel('Time', fontsize=12, color='#666')
-        ax.set_ylabel('Price (₹)', fontsize=12, color='#666')
+        ax1.set_title(title, fontsize=16, fontweight='bold', pad=20, color='#333')
+        ax1.set_ylabel('Price (₹)', fontsize=12, color='#666')
+        ax1.grid(True, alpha=0.2, linestyle='--', linewidth=0.5, color='#ccc')
         
-        # Grid
-        ax.grid(True, alpha=0.2, linestyle='--', linewidth=0.5, color='#ccc')
-        
-        # X-axis labels
+        # X-axis
         step = max(len(df) // 12, 1)
         xticks = list(range(0, len(df), step))
         xticklabels = [df.iloc[i]['timestamp'].strftime('%d %b\n%H:%M') for i in xticks]
-        ax.set_xticks(xticks)
-        ax.set_xticklabels(xticklabels, fontsize=9, color='#666')
+        ax1.set_xticks(xticks)
+        ax1.set_xticklabels(xticklabels, fontsize=9, color='#666')
+        ax1.tick_params(axis='y', labelsize=10, colors='#666')
         
-        # Y-axis formatting
-        ax.tick_params(axis='y', labelsize=10, colors='#666')
+        # Volume subplot
+        if ax2 and 'volume' in df.columns:
+            ax2.set_facecolor('white')
+            for idx, row in df.iterrows():
+                color = '#26a69a' if row['close'] >= row['open'] else '#ef5350'
+                ax2.bar(idx, row['volume'], color=color, alpha=0.5, width=0.8)
+            
+            ax2.set_xlim(-1, len(df))
+            ax2.set_ylabel('Volume', fontsize=11, color='#666')
+            ax2.set_xlabel('Time', fontsize=11, color='#666')
+            ax2.grid(True, alpha=0.2, linestyle='--', linewidth=0.5, color='#ccc')
+            ax2.set_xticks(xticks)
+            ax2.set_xticklabels(xticklabels, fontsize=9, color='#666')
+            ax2.tick_params(axis='y', labelsize=9, colors='#666')
         
         plt.tight_layout()
         
@@ -231,16 +253,15 @@ def create_candlestick_chart(candles, title):
         return None
 
 def format_option_chain_message(option_data):
-    """Format option chain data for Telegram"""
+    """Format option chain data"""
     if not option_data:
-        return "❌ Option chain data not available"
+        return "❌ Option chain data not available (check market hours)"
     
     text = "📊 *NIFTY 50 OPTION CHAIN* 📊\n\n"
     text += f"⏰ Time: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}\n"
     text += f"📅 Expiry: {get_next_expiry()}\n"
     text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    # Process first 15 strikes (ATM ± 7)
     for idx, option in enumerate(option_data[:15], 1):
         strike = option.get('strike_price', 'N/A')
         
@@ -249,51 +270,48 @@ def format_option_chain_message(option_data):
         # Call Option
         call = option.get('call_options', {})
         if call:
-            text += f"📞 CALL\n"
-            text += f"  LTP: ₹{call.get('last_price', 0):.2f}\n"
-            text += f"  OI: {call.get('oi', 0):,}\n"
-            text += f"  Vol: {call.get('volume', 0):,}\n"
+            text += f"📞 CALL: LTP ₹{call.get('last_price', 0):.2f} | "
+            text += f"OI {call.get('oi', 0):,} | Vol {call.get('volume', 0):,}\n"
         
-        # Put Option  
+        # Put Option
         put = option.get('put_options', {})
         if put:
-            text += f"📉 PUT\n"
-            text += f"  LTP: ₹{put.get('last_price', 0):.2f}\n"
-            text += f"  OI: {put.get('oi', 0):,}\n"
-            text += f"  Vol: {put.get('volume', 0):,}\n"
+            text += f"📉 PUT: LTP ₹{put.get('last_price', 0):.2f} | "
+            text += f"OI {put.get('oi', 0):,} | Vol {put.get('volume', 0):,}\n"
         
         text += "\n"
     
     return text
 
-def format_greeks_message(greeks_data):
-    """Format Greeks data for Telegram"""
-    if not greeks_data:
-        return "❌ Greeks data not available"
+def format_market_status():
+    """Check if market is open"""
+    now = datetime.now()
+    weekday = now.weekday()  # 0=Monday, 6=Sunday
+    time_now = now.time()
     
-    text = "🔬 *OPTION GREEKS DATA* 🔬\n\n"
-    text += f"⏰ Time: {datetime.now().strftime('%d %b %Y, %H:%M:%S')}\n"
-    text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    # Market hours: Mon-Fri, 9:15 AM - 3:30 PM
+    market_open = time_now >= datetime.strptime("09:15", "%H:%M").time()
+    market_close = time_now <= datetime.strptime("15:30", "%H:%M").time()
+    is_weekday = weekday < 5
     
-    for instrument, data in list(greeks_data.items())[:20]:  # First 20
-        text += f"*{instrument.split('|')[1] if '|' in instrument else instrument}*\n"
-        text += f"  LTP: ₹{data.get('last_price', 0):.2f}\n"
-        text += f"  Delta: {data.get('delta', 0):.4f}\n"
-        text += f"  Theta: {data.get('theta', 0):.4f}\n"
-        text += f"  Vega: {data.get('vega', 0):.4f}\n"
-        text += f"  Gamma: {data.get('gamma', 0):.6f}\n"
-        text += f"  IV: {data.get('iv', 0):.4f}\n"
-        text += f"  OI: {data.get('oi', 0):,}\n"
-        text += f"  Vol: {data.get('volume', 0):,}\n\n"
+    is_open = is_weekday and market_open and market_close
     
-    return text
+    status = "🟢 MARKET OPEN" if is_open else "🔴 MARKET CLOSED"
+    
+    if not is_weekday:
+        return f"{status}\n⚠️ Weekend - Market opens Monday 9:15 AM"
+    elif not market_open:
+        return f"{status}\n⚠️ Market opens at 9:15 AM"
+    elif not market_close:
+        return f"{status}\n⚠️ Market closed at 3:30 PM"
+    
+    return status
 
 async def send_telegram_message(message):
     """Send text message to Telegram"""
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
         
-        # Split if too long
         if len(message) > 4096:
             parts = [message[i:i+4096] for i in range(0, len(message), 4096)]
             for part in parts:
@@ -321,105 +339,109 @@ async def send_telegram_photo(photo, caption):
 
 async def main():
     print("\n" + "="*70)
-    print("🚀 UPSTOX MARKET DATA & OPTION CHAIN BOT")
+    print("🚀 UPSTOX MARKET DATA BOT - V3 API")
     print("="*70 + "\n")
     
-    # Verify credentials
+    # Check credentials
     if UPSTOX_ACCESS_TOKEN == "your_access_token":
-        print("❌ Please set UPSTOX_ACCESS_TOKEN environment variable!")
+        print("❌ Set UPSTOX_ACCESS_TOKEN environment variable!")
         return
     
     if TELEGRAM_BOT_TOKEN == "your_telegram_bot_token":
-        print("❌ Please set TELEGRAM_BOT_TOKEN environment variable!")
+        print("❌ Set TELEGRAM_BOT_TOKEN environment variable!")
         return
     
-    # 1. Send welcome message
-    welcome_msg = f"🎯 *Market Data Update*\n\n⏰ {datetime.now().strftime('%d %b %Y, %H:%M:%S')}\n\nFetching latest market data..."
-    await send_telegram_message(welcome_msg)
+    # Market status
+    market_status = format_market_status()
+    print(market_status)
+    print()
     
-    # 2. Fetch and send Nifty 50 Index Chart
+    # Welcome message
+    welcome = f"🎯 *Market Data Update*\n\n{market_status}\n⏰ {datetime.now().strftime('%d %b %Y, %H:%M:%S')}\n\nFetching data using Upstox V3 API..."
+    await send_telegram_message(welcome)
+    
+    # 1. NIFTY 50 Index - Try intraday first, then historical
     print("📈 Fetching NIFTY 50 Index data...")
-    nifty_candles = get_intraday_candles(NIFTY_INDEX_KEY, "5minute")
+    
+    nifty_candles = get_intraday_candles_v3(NIFTY_INDEX_KEY, "5", "minute")
+    
+    if not nifty_candles or len(nifty_candles) < 5:
+        print("  ⚠️ No intraday data, trying historical (last 5 days)...")
+        nifty_candles = get_historical_candles_v3(NIFTY_INDEX_KEY, "5", "minute", 5)
     
     if nifty_candles and len(nifty_candles) > 0:
-        print(f"✅ Got {len(nifty_candles)} candles for NIFTY 50")
-        chart = create_candlestick_chart(nifty_candles, "NIFTY 50 Index - 5 Minute Chart")
+        print(f"  ✅ Got {len(nifty_candles)} candles")
+        chart = create_candlestick_chart(nifty_candles, "NIFTY 50 - 5 Minute Chart", show_volume=True)
         if chart:
-            await send_telegram_photo(chart, "📊 *NIFTY 50 Index*")
+            await send_telegram_photo(chart, "📊 *NIFTY 50 Index*\n5-minute candles")
             await asyncio.sleep(2)
     else:
-        print("⚠️ No intraday candles available (market might be closed)")
+        await send_telegram_message("⚠️ NIFTY 50 data unavailable (market closed or API issue)")
     
-    # 3. Fetch and send Option Chain
-    print("\n📊 Fetching Option Chain data...")
+    # 2. Option Chain
+    print("\n📊 Fetching Option Chain...")
     option_chain = get_option_chain_data()
     
     if option_chain:
-        print(f"✅ Got option chain with {len(option_chain)} strikes")
+        print(f"  ✅ Got {len(option_chain)} strikes")
         msg = format_option_chain_message(option_chain)
         await send_telegram_message(msg)
         await asyncio.sleep(2)
-        
-        # Get instrument keys for Greeks
-        option_keys = []
-        for opt in option_chain[:25]:  # Get first 25 strikes
-            if 'call_options' in opt:
-                option_keys.append(opt['call_options'].get('instrument_key', ''))
-            if 'put_options' in opt:
-                option_keys.append(opt['put_options'].get('instrument_key', ''))
-        
-        # Remove empty keys
-        option_keys = [k for k in option_keys if k]
-        
-        if option_keys:
-            print(f"\n🔬 Fetching Greeks for {len(option_keys)} options...")
-            greeks = get_option_greeks(option_keys)
-            if greeks:
-                print(f"✅ Got Greeks data for {len(greeks)} instruments")
-                greeks_msg = format_greeks_message(greeks)
-                await send_telegram_message(greeks_msg)
-                await asyncio.sleep(2)
+    else:
+        await send_telegram_message("⚠️ Option chain unavailable (market closed or auth issue)")
     
-    # 4. Fetch and send top 10 Nifty 50 stocks
-    print("\n📈 Fetching Nifty 50 Stocks data...")
+    # 3. Nifty 50 Stocks
+    print("\n📈 Fetching Nifty 50 Stocks...")
+    
+    successful_charts = 0
     
     for idx, (name, key) in enumerate(list(NIFTY_50_STOCKS.items())[:10], 1):
-        print(f"  [{idx}/10] Processing {name}...")
+        print(f"  [{idx}/10] {name}...", end=" ")
         
-        candles = get_intraday_candles(key, "5minute")
+        # Try intraday first
+        candles = get_intraday_candles_v3(key, "5", "minute")
+        
+        # If no intraday, try historical
+        if not candles or len(candles) < 5:
+            candles = get_historical_candles_v3(key, "5", "minute", 5)
         
         if candles and len(candles) > 5:
-            chart = create_candlestick_chart(candles, f"{name} - 5 Minute Intraday Chart")
+            chart = create_candlestick_chart(candles, f"{name} - 5 Minute Chart", show_volume=True)
             if chart:
-                await send_telegram_photo(chart, f"📊 *{name}*\n{len(candles)} candles")
-                await asyncio.sleep(3)  # Rate limiting
+                await send_telegram_photo(chart, f"📊 *{name}*\n{len(candles)} candles (5-min)")
+                successful_charts += 1
+                print(f"✅ {len(candles)} candles")
+                await asyncio.sleep(3)
+            else:
+                print("❌ Chart error")
         else:
-            print(f"    ⚠️ No data for {name}")
+            print("⚠️ No data")
     
-    # 5. Summary message
-    summary = f"\n✅ *Data Update Complete!*\n\n"
+    # Summary
+    summary = f"\n✅ *Update Complete!*\n\n"
+    summary += f"{market_status}\n\n"
     summary += f"📊 Processed:\n"
     summary += f"  • NIFTY 50 Index\n"
     summary += f"  • Option Chain ({len(option_chain)} strikes)\n"
-    summary += f"  • {len(NIFTY_50_STOCKS)} Nifty 50 Stocks\n\n"
-    summary += f"⏰ Completed at: {datetime.now().strftime('%H:%M:%S')}"
+    summary += f"  • {successful_charts}/10 Stock Charts\n\n"
+    summary += f"⏰ {datetime.now().strftime('%H:%M:%S')}\n"
+    summary += f"🔄 Using Upstox V3 API (5-min candles)"
     
     await send_telegram_message(summary)
     
     print("\n" + "="*70)
-    print("✅ ALL DATA SENT SUCCESSFULLY!")
+    print(f"✅ COMPLETED! Sent {successful_charts} stock charts")
     print("="*70 + "\n")
 
 if __name__ == "__main__":
-    print("\n🔧 Checking dependencies...")
+    print("🔧 Checking dependencies...")
     try:
         import pandas
         import matplotlib
         from telegram import Bot
         print("✅ All dependencies loaded!\n")
     except ImportError as e:
-        print(f"❌ Missing dependency: {e}")
-        print("Run: pip install -r requirements.txt")
+        print(f"❌ Missing: {e}")
         exit(1)
     
     asyncio.run(main())
