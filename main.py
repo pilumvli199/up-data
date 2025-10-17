@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# main.py - UPSTOX MARKET DATA BOT (FULL, robust)
+# main.py - UPSTOX MARKET DATA BOT (FULL, robust, updated option-chain)
 # Save as main.py and run. Set env vars: UPSTOX_ACCESS_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 import os
@@ -254,7 +254,7 @@ def get_historical_candles(instrument_key, interval="1minute", days=5):
         print(f"  Error fetching historical candles: {e}")
         return []
 
-# ======================== OPTION CHAIN & GREEKS ========================
+# ======================== OPTION CHAIN & GREEKS (updated) ========================
 
 def get_next_expiry():
     today = get_ist_now()
@@ -266,12 +266,40 @@ def get_next_expiry():
 
 def get_option_contracts():
     """
-    Fetch option contracts for NIFTY for chosen expiry.
-    Uses pagination heuristics and prints response body for debugging.
+    Primary flow: try /v2/option/chain (put/call chain) which directly returns PC pairs.
+    Fallback: call /v2/option/contract (list of contracts) if chain endpoint not available.
+    Prints response body for debugging.
     """
     try:
         expiry = get_next_expiry()
-        print(f"  Looking up option contracts for expiry {expiry} ...")
+        print(f"  Looking up option CHAIN for expiry {expiry} (first try /v2/option/chain)...")
+
+        # Try the option chain endpoint first (returns PC combined)
+        url_chain = f"{BASE_URL}/v2/option/chain"
+        params_chain = {"instrument_key": NIFTY_INDEX_KEY, "expiry_date": expiry}
+        data_chain = http_get(url_chain, headers=HEADERS, params=params_chain, timeout=15, retries=2)
+        if data_chain:
+            # Normalize possible shapes: data -> strikes or data -> list
+            if isinstance(data_chain, dict):
+                payload = data_chain.get('data') or data_chain
+                # If payload already a list of strikes
+                if isinstance(payload, list) and len(payload) > 0:
+                    print("  /v2/option/chain returned list payload.")
+                    return payload
+                # If payload is dict with 'strikes' or similar
+                if isinstance(payload, dict):
+                    if 'strikes' in payload and isinstance(payload['strikes'], list):
+                        print("  /v2/option/chain returned strikes inside data.")
+                        return payload['strikes']
+                    # sometimes API returns 'option_chain' etc.
+                    for k in ('option_chain','chain','contracts','data'):
+                        if k in payload and isinstance(payload[k], list):
+                            return payload[k]
+            elif isinstance(data_chain, list):
+                return data_chain
+
+        # If chain endpoint didn't return useful data, fallback to contract list
+        print("  /v2/option/chain empty or unsupported — falling back to /v2/option/contract ...")
         url = f"{BASE_URL}/v2/option/contract"
         all_contracts = []
         page = 1
@@ -306,7 +334,7 @@ def get_option_contracts():
         all_contracts = [c for c in all_contracts if isinstance(c, dict) and c.get('instrument_key')]
         return all_contracts
     except Exception as e:
-        print("  Error fetching option contracts:", e)
+        print("  Error fetching option contracts/chain:", e)
         return []
 
 def get_option_greeks(instrument_keys):
@@ -376,38 +404,50 @@ def get_instrument_ltp(instrument_key):
 
 def get_option_chain_data():
     """
-    Build option chain. Returns dict: {'strikes': [...], 'atm_index': int, 'underlying_ltp': float}
+    Build option chain using chain endpoint if available, else contract+greeks.
+    Returns either:
+      - {'strikes': [...], 'atm_index': int, 'underlying_ltp': num}
+      - {} on failure
     """
     try:
-        print("  Getting option contracts...")
-        contracts = get_option_contracts()
-        if not contracts:
-            print("  ⚠️ No contracts found")
+        print("  Building option chain payload...")
+        # 1) Try to get combined PC chain directly (many accounts support this)
+        raw_strikes = get_option_contracts()
+        if not raw_strikes or len(raw_strikes) == 0:
+            print("  ⚠️ No option strikes/contracts returned by API.")
             return {}
-        print(f"  Got {len(contracts)} contracts")
+
+        # If raw_strikes is already a list of strike dicts with call/put keys, try to detect and return
+        sample = raw_strikes[0] if isinstance(raw_strikes, list) and len(raw_strikes) > 0 else None
+        if sample and isinstance(sample, dict) and ('call' in sample or 'put' in sample or 'strike_price' in sample):
+            sorted_strikes = sorted(raw_strikes, key=lambda x: x.get('strike_price', 0))
+            underlying_ltp = get_instrument_ltp(NIFTY_INDEX_KEY)
+            atm_index = len(sorted_strikes)//2
+            if underlying_ltp is not None and len(sorted_strikes) > 0:
+                atm_index = min(range(len(sorted_strikes)), key=lambda i: abs(sorted_strikes[i]['strike_price'] - underlying_ltp))
+            return {"strikes": sorted_strikes, "atm_index": atm_index, "underlying_ltp": underlying_ltp}
+
+        # Otherwise, raw_strikes probably is a list of contract objects (instrument_key per contract).
+        print("  Raw contracts received; building call/put pairs using Greeks (batches)...")
+        contracts = raw_strikes
         instrument_keys = [c.get('instrument_key') for c in contracts if c.get('instrument_key')]
         all_greeks = {}
-        print(f"  Fetching Greeks for {len(instrument_keys)} instruments (batches)...")
         for i in range(0, len(instrument_keys), 50):
             batch = instrument_keys[i:i+50]
             greeks = get_option_greeks(batch)
             if greeks:
                 all_greeks.update(greeks)
             time.sleep(0.25)
-        print(f"  Got Greeks for {len(all_greeks)} instruments (collected)")
         option_chain = []
         for c in contracts:
             key = c.get('instrument_key')
             strike = c.get('strike_price') or c.get('strike') or c.get('strikePrice')
             option_type = (c.get('option_type') or c.get('optionType') or '').upper()
-            base = {
+            g = all_greeks.get(key, {})
+            opt = {
                 'strike_price': float(strike) if strike is not None else None,
                 'instrument_key': key,
-                'option_type': 'CE' if option_type in ('CE','CALL') else ('PE' if option_type in ('PE','PUT') else option_type)
-            }
-            g = all_greeks.get(key, {})
-            opt = dict(base)
-            opt.update({
+                'option_type': 'CE' if option_type in ('CE','CALL') else ('PE' if option_type in ('PE','PUT') else option_type),
                 'last_price': float(g.get('last_price') or g.get('ltp') or 0),
                 'oi': int(g.get('oi') or g.get('open_interest') or 0),
                 'volume': int(g.get('volume') or 0),
@@ -416,8 +456,9 @@ def get_option_chain_data():
                 'gamma': float(g.get('gamma') or 0),
                 'vega': float(g.get('vega') or 0),
                 'iv': float(g.get('iv') or g.get('implied_volatility') or 0)
-            })
+            }
             option_chain.append(opt)
+        # group by strike
         strikes = {}
         for opt in option_chain:
             s = opt['strike_price']
@@ -431,12 +472,9 @@ def get_option_chain_data():
                 strikes[s]['put'] = opt
         sorted_strikes = sorted(strikes.values(), key=lambda x: x['strike_price'])
         underlying_ltp = get_instrument_ltp(NIFTY_INDEX_KEY)
+        atm_index = len(sorted_strikes)//2
         if underlying_ltp is not None and len(sorted_strikes) > 0:
             atm_index = min(range(len(sorted_strikes)), key=lambda i: abs(sorted_strikes[i]['strike_price'] - underlying_ltp))
-            print(f"  Underlying LTP: {underlying_ltp:.2f} — ATM approx strike: {sorted_strikes[atm_index]['strike_price']}")
-        else:
-            atm_index = len(sorted_strikes)//2
-            print("  Could not determine underlying LTP — using mid-index as ATM fallback.")
         return {"strikes": sorted_strikes, "atm_index": atm_index, "underlying_ltp": underlying_ltp}
     except Exception as e:
         print("  Error building option chain:", e)
