@@ -149,15 +149,17 @@ def get_historical_candles(instrument_key, interval="30minute", days=5):
         print(f"  Error fetching historical candles: {str(e)}")
         return []
 
-def get_option_chain_data():
-    """Fetch option chain data"""
+def get_option_contracts():
+    """
+    Fetch all option contracts for NIFTY (all strikes)
+    Returns list of instrument keys
+    """
     try:
-        expiry_date = get_next_expiry()
-        url = f"{BASE_URL}/v2/option/chain"
+        url = f"{BASE_URL}/v2/option/contract"
         
         params = {
             "instrument_key": NIFTY_INDEX_KEY,
-            "expiry_date": expiry_date
+            "expiry_date": get_next_expiry()
         }
         
         response = requests.get(url, headers=HEADERS, params=params)
@@ -169,7 +171,119 @@ def get_option_chain_data():
             return data.get('data', [])
         return []
     except Exception as e:
-        print(f"  Error fetching option chain: {str(e)}")
+        print(f"  Error fetching option contracts: {str(e)}")
+        return []
+
+def get_option_greeks(instrument_keys):
+    """
+    Fetch option Greeks for given instrument keys
+    Max 50 instruments per request
+    Returns: {instrument_key: {ltp, delta, theta, gamma, vega, iv, oi, volume}}
+    """
+    try:
+        if not instrument_keys:
+            return {}
+        
+        url = f"{BASE_URL}/v2/option/greek"
+        
+        # Join first 50 keys
+        keys_str = ",".join(instrument_keys[:50])
+        
+        params = {
+            "instrument_key": keys_str
+        }
+        
+        response = requests.get(url, headers=HEADERS, params=params)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get('status') == 'success':
+            return data.get('data', {})
+        return {}
+    except Exception as e:
+        print(f"  Error fetching Greeks: {str(e)}")
+        return {}
+
+def get_option_chain_data():
+    """
+    Build complete option chain using Contract API + Greeks API
+    """
+    try:
+        print("  Getting option contracts...")
+        contracts = get_option_contracts()
+        
+        if not contracts or len(contracts) == 0:
+            print("  ⚠️ No contracts found")
+            return []
+        
+        print(f"  Got {len(contracts)} contracts")
+        
+        # Extract instrument keys
+        instrument_keys = [c.get('instrument_key') for c in contracts if c.get('instrument_key')]
+        
+        if not instrument_keys:
+            print("  ⚠️ No instrument keys")
+            return []
+        
+        # Get Greeks for all instruments (in batches of 50)
+        print(f"  Fetching Greeks for {len(instrument_keys)} instruments...")
+        
+        all_greeks = {}
+        for i in range(0, len(instrument_keys), 50):
+            batch = instrument_keys[i:i+50]
+            greeks = get_option_greeks(batch)
+            all_greeks.update(greeks)
+            time.sleep(0.5)  # Rate limiting
+        
+        print(f"  Got Greeks for {len(all_greeks)} instruments")
+        
+        # Combine contracts with Greeks
+        option_chain = []
+        
+        for contract in contracts:
+            key = contract.get('instrument_key')
+            strike = contract.get('strike_price')
+            option_type = contract.get('option_type')  # CE or PE
+            
+            if key in all_greeks:
+                greek_data = all_greeks[key]
+                
+                option_info = {
+                    'strike_price': strike,
+                    'instrument_key': key,
+                    'option_type': option_type,
+                    'last_price': greek_data.get('last_price', 0),
+                    'oi': greek_data.get('oi', 0),
+                    'volume': greek_data.get('volume', 0),
+                    'delta': greek_data.get('delta', 0),
+                    'theta': greek_data.get('theta', 0),
+                    'gamma': greek_data.get('gamma', 0),
+                    'vega': greek_data.get('vega', 0),
+                    'iv': greek_data.get('iv', 0)
+                }
+                
+                option_chain.append(option_info)
+        
+        # Group by strike price
+        strikes_dict = {}
+        for opt in option_chain:
+            strike = opt['strike_price']
+            if strike not in strikes_dict:
+                strikes_dict[strike] = {'strike_price': strike, 'call': None, 'put': None}
+            
+            if opt['option_type'] == 'CE':
+                strikes_dict[strike]['call'] = opt
+            elif opt['option_type'] == 'PE':
+                strikes_dict[strike]['put'] = opt
+        
+        # Convert to sorted list
+        result = sorted(strikes_dict.values(), key=lambda x: x['strike_price'])
+        
+        return result
+        
+    except Exception as e:
+        print(f"  Error building option chain: {str(e)}")
         return []
 
 def get_next_expiry():
@@ -280,30 +394,52 @@ def create_candlestick_chart(candles, title, show_volume=False):
         return None
 
 def format_option_chain_message(option_data):
-    """Format option chain data"""
-    if not option_data:
+    """Format option chain data with Greeks"""
+    if not option_data or len(option_data) == 0:
         return "❌ Option chain data not available"
     
     now_ist = get_ist_now()
     text = "📊 *NIFTY 50 OPTION CHAIN* 📊\n\n"
-    text += f"⏰ IST: {now_ist.strftime('%d %b %Y, %I:%M:%S %p')}\n"
+    text += f"⏰ {now_ist.strftime('%d %b %Y, %I:%M:%S %p IST')}\n"
     text += f"📅 Expiry: {get_next_expiry()}\n"
+    text += f"📈 Total Strikes: {len(option_data)}\n"
     text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    for idx, option in enumerate(option_data[:15], 1):
-        strike = option.get('strike_price', 'N/A')
+    # Show ATM ± 10 strikes (total 20 strikes)
+    mid_index = len(option_data) // 2
+    start = max(0, mid_index - 10)
+    end = min(len(option_data), mid_index + 10)
+    
+    for strike_data in option_data[start:end]:
+        strike = strike_data.get('strike_price', 'N/A')
         
         text += f"*Strike: {strike}*\n"
         
-        call = option.get('call_options', {})
+        # Call Option (CE)
+        call = strike_data.get('call')
         if call:
-            text += f"📞 CALL: LTP ₹{call.get('last_price', 0):.2f} | "
-            text += f"OI {call.get('oi', 0):,} | Vol {call.get('volume', 0):,}\n"
+            text += f"📞 *CALL*\n"
+            text += f"  LTP: ₹{call.get('last_price', 0):.2f}\n"
+            text += f"  OI: {call.get('oi', 0):,}\n"
+            text += f"  Vol: {call.get('volume', 0):,}\n"
+            text += f"  𝛿: {call.get('delta', 0):.3f} | "
+            text += f"𝜃: {call.get('theta', 0):.2f}\n"
+            text += f"  𝛄: {call.get('gamma', 0):.5f} | "
+            text += f"𝜈: {call.get('vega', 0):.2f}\n"
+            text += f"  IV: {call.get('iv', 0):.2%}\n"
         
-        put = option.get('put_options', {})
+        # Put Option (PE)
+        put = strike_data.get('put')
         if put:
-            text += f"📉 PUT: LTP ₹{put.get('last_price', 0):.2f} | "
-            text += f"OI {put.get('oi', 0):,} | Vol {put.get('volume', 0):,}\n"
+            text += f"📉 *PUT*\n"
+            text += f"  LTP: ₹{put.get('last_price', 0):.2f}\n"
+            text += f"  OI: {put.get('oi', 0):,}\n"
+            text += f"  Vol: {put.get('volume', 0):,}\n"
+            text += f"  𝛿: {put.get('delta', 0):.3f} | "
+            text += f"𝜃: {put.get('theta', 0):.2f}\n"
+            text += f"  𝛄: {put.get('gamma', 0):.5f} | "
+            text += f"𝜈: {put.get('vega', 0):.2f}\n"
+            text += f"  IV: {put.get('iv', 0):.2%}\n"
         
         text += "\n"
     
@@ -354,15 +490,32 @@ async def send_telegram_message(message):
         print(f"Telegram error: {str(e)}")
         return False
 
-async def send_telegram_photo(photo, caption):
-    """Send photo to Telegram"""
-    try:
-        bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo, caption=caption, parse_mode='Markdown')
-        return True
-    except Exception as e:
-        print(f"Telegram photo error: {str(e)}")
-        return False
+async def send_telegram_photo(photo, caption, retries=3):
+    """Send photo to Telegram with retry logic"""
+    for attempt in range(retries):
+        try:
+            bot = Bot(token=TELEGRAM_BOT_TOKEN)
+            await bot.send_photo(
+                chat_id=TELEGRAM_CHAT_ID, 
+                photo=photo, 
+                caption=caption, 
+                parse_mode='Markdown',
+                read_timeout=30,
+                write_timeout=30,
+                connect_timeout=30
+            )
+            return True
+        except TelegramError as e:
+            if attempt < retries - 1:
+                print(f"  Retry {attempt + 1}/{retries} after timeout...")
+                await asyncio.sleep(2)
+            else:
+                print(f"  Telegram photo error after {retries} attempts: {str(e)}")
+                return False
+        except Exception as e:
+            print(f"  Error sending photo: {str(e)}")
+            return False
+    return False
 
 # ======================== MAIN FUNCTION ========================
 
