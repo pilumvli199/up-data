@@ -1,42 +1,39 @@
-# upstox_market_bot_full.py
-# Full script: improved, robust, preserves original behavior + fixes
-# Supports: intraday 1min->5min resample, historical fetch, option chain (contracts + greeks batching),
-# candlestick chart generation, telegram photo/text sending with retries.
-#
-# Notes: Set UPSTOX_ACCESS_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID as env vars or edit defaults below.
+#!/usr/bin/env python3
+# main.py - UPSTOX MARKET DATA BOT (FULL, robust)
+# Save as main.py and run. Make sure environment variables are set:
+# UPSTOX_ACCESS_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
+import os
+import io
+import time
+import random
+import asyncio
 import requests
+import urllib.parse
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from datetime import datetime, timedelta
-import io
-import asyncio
 from telegram import Bot
 from telegram.error import TelegramError
-import os
-import time
 import pytz
-import random
-import math
-from time import sleep
 
 # ======================== CONFIGURATION ========================
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN", "your_access_token")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "your_telegram_bot_token")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "your_telegram_chat_id")
 
-# Timezone Configuration
+# Timezone
 IST = pytz.timezone('Asia/Kolkata')
 
-# Upstox API Configuration
+# API base
 BASE_URL = "https://api.upstox.com"
 HEADERS = {
     "Accept": "application/json",
     "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
 }
 
-# ======================== INSTRUMENT KEYS ========================
+# NIFTY stocks (subset)
 NIFTY_50_STOCKS = {
     "HDFCBANK": "NSE_EQ|INE040A01034",
     "RELIANCE": "NSE_EQ|INE002A01018",
@@ -62,24 +59,41 @@ NIFTY_50_STOCKS = {
 
 NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
 
-# ======================== HELPERS & RETRIES ========================
+# ======================== UTILITIES ========================
 
 def get_ist_now():
     return datetime.now(IST)
 
+def safe_print_response(resp):
+    try:
+        print("  HTTP", resp.status_code, "for URL:", resp.url)
+        text = resp.text
+        print("  Response body (truncated 1000 chars):")
+        print(text[:1000])
+    except Exception as e:
+        print("  Could not print response body:", e)
+
 def http_get(url, headers=None, params=None, timeout=12, retries=3, backoff=1.5):
-    """GET with retries and exponential-ish backoff. Returns parsed JSON or None."""
+    """
+    GET with retries. Prints non-2xx response body to help debug.
+    Returns parsed JSON or None.
+    """
     for attempt in range(1, retries+1):
         try:
             resp = requests.get(url, headers=headers or {"Accept":"application/json"}, params=params, timeout=timeout)
-            resp.raise_for_status()
+            if not resp.ok:
+                # print helpful info
+                try:
+                    safe_print_response(resp)
+                except:
+                    pass
+                resp.raise_for_status()
             try:
                 return resp.json()
             except ValueError:
-                # not json
                 return None
         except Exception as e:
-            wait = (backoff ** (attempt-1)) + random.random()*0.3
+            wait = (backoff ** (attempt-1)) + random.random() * 0.3
             print(f"  Request error {e} (attempt {attempt}/{retries}). Retrying in {wait:.2f}s...")
             if attempt < retries:
                 time.sleep(wait)
@@ -87,35 +101,29 @@ def http_get(url, headers=None, params=None, timeout=12, retries=3, backoff=1.5)
                 print("  Max retries reached for:", url)
                 return None
 
-# ======================== RESAMPLE / CANDLES ========================
+# ======================== CANDLE RESAMPLE ========================
 
 def resample_to_5min(candles_1min):
     """
-    Convert 1-minute candles to 5-minute candles
-    candles format: [[timestamp, open, high, low, close, volume, oi], ...]
-    or list of lists where timestamp is parseable
+    Convert varied 1-min candle shapes to 5-min candles.
+    Input rows can be list/tuple or dict.
+    Returns list of rows: [timestamp, open, high, low, close, volume, oi]
     """
     if not candles_1min:
         return []
     try:
-        # Build DataFrame robustly: support both tuple/list with various lengths
-        # Normalize each row to at least [timestamp, open, high, low, close, volume, oi]
         rows = []
         for r in candles_1min:
-            # r may be list like [ts, o, h, l, c, v, oi] or dict
             if isinstance(r, dict):
                 ts = r.get('timestamp') or r.get('time') or r.get('date')
                 o = r.get('open')
                 h = r.get('high')
                 l = r.get('low')
-                c = r.get('close') or r.get('ltp')
+                c = r.get('close') or r.get('ltp') or r.get('last_price')
                 v = r.get('volume') or r.get('vol')
                 oi = r.get('oi') or r.get('open_interest')
                 rows.append([ts, o, h, l, c, v, oi])
             elif isinstance(r, (list, tuple)):
-                # adapt by position
-                # common positions: [ts, o, h, l, c, v, oi]
-                # if length 6 -> no oi
                 if len(r) >= 7:
                     ts, o, h, l, c, v, oi = r[:7]
                 elif len(r) == 6:
@@ -132,85 +140,115 @@ def resample_to_5min(candles_1min):
                 continue
 
         df = pd.DataFrame(rows, columns=['timestamp','open','high','low','close','volume','oi'])
-        # parse timestamp
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.sort_values('timestamp').set_index('timestamp')
-        # Resample to 5T
         resampled = df.resample('5T').agg({
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum',
-            'oi': 'last'
+            'open':'first',
+            'high':'max',
+            'low':'min',
+            'close':'last',
+            'volume':'sum',
+            'oi':'last'
         }).dropna()
         resampled.reset_index(inplace=True)
-        # convert to list format expected by charting
         out = resampled[['timestamp','open','high','low','close','volume','oi']].values.tolist()
         return out
     except Exception as e:
         print("  Error resampling:", e)
         return []
 
-# ======================== INTRADAY / HISTORICAL ========================
+# ======================== INTRADAY/HISTORICAL (robust) ========================
 
 def get_intraday_candles(instrument_key):
     """
-    Fetch intraday 1-minute candles and convert to 5-minute
-    Uses V2 API (path: /v2/historical-candle/{instrument_key}/1minute)
+    Tries:
+      1) Path-style: /v2/historical-candle/{encoded_key}/1minute
+      2) Query-style fallback: /v2/historical-candle?instrument_key=...&interval=1minute
     """
     try:
-        url = f"{BASE_URL}/v2/historical-candle/{instrument_key}/1minute"
-        data = http_get(url, headers={"Accept":"application/json"}, timeout=12, retries=2)
-        if not data:
-            return []
-        # typical shape: {'status': 'success', 'data': {'candles': [...]} }
+        encoded_key = urllib.parse.quote(instrument_key, safe='')
+        url_path = f"{BASE_URL}/v2/historical-candle/{encoded_key}/1minute"
+        data = http_get(url_path, headers={"Accept":"application/json"}, timeout=10, retries=2)
         candles_1min = None
-        if isinstance(data, dict):
-            if 'data' in data and isinstance(data['data'], dict) and 'candles' in data['data']:
-                candles_1min = data['data']['candles']
-            elif 'candles' in data:
-                candles_1min = data['candles']
-            else:
-                # maybe data itself is list
-                if isinstance(data.get('data'), list):
+        if data:
+            if isinstance(data, dict):
+                if 'data' in data and isinstance(data['data'], dict) and 'candles' in data['data']:
+                    candles_1min = data['data']['candles']
+                elif 'candles' in data:
+                    candles_1min = data['candles']
+                elif isinstance(data.get('data'), list):
                     candles_1min = data['data']
-        elif isinstance(data, list):
-            candles_1min = data
+            elif isinstance(data, list):
+                candles_1min = data
+        if candles_1min:
+            return resample_to_5min(candles_1min)[:500]
 
-        if not candles_1min:
+        print("  Path-style intraday failed or empty — trying query-style...")
+        url_query = f"{BASE_URL}/v2/historical-candle"
+        params = {"instrument_key": instrument_key, "interval":"1minute"}
+        data2 = http_get(url_query, headers=HEADERS, params=params, timeout=12, retries=2)
+        if not data2:
             return []
-        return resample_to_5min(candles_1min)[:500]
+        if isinstance(data2, dict):
+            if 'data' in data2 and isinstance(data2['data'], dict) and 'candles' in data2['data']:
+                candles_1min = data2['data']['candles']
+            elif 'candles' in data2:
+                candles_1min = data2['candles']
+            elif isinstance(data2.get('data'), list):
+                candles_1min = data2['data']
+        elif isinstance(data2, list):
+            candles_1min = data2
+        if candles_1min:
+            return resample_to_5min(candles_1min)[:500]
+        return []
     except Exception as e:
         print("  Error fetching intraday candles:", e)
         return []
 
 def get_historical_candles(instrument_key, interval="1minute", days=5):
     """
-    Fetch historical candles with from_date then to_date (fixed ordering)
-    interval param kept for compatibility but will use 1minute for resample
+    Tries path-style with from/to and query-style fallback.
     """
     try:
-        now = get_ist_now()
-        to_date = now.strftime('%Y-%m-%d')
-        from_date = (now - timedelta(days=days)).strftime('%Y-%m-%d')
-        url = f"{BASE_URL}/v2/historical-candle/{instrument_key}/1minute/{from_date}/{to_date}"
-        data = http_get(url, headers={"Accept":"application/json"}, timeout=20, retries=3)
-        if not data:
-            return []
+        now_ist = get_ist_now()
+        to_date = now_ist.strftime('%Y-%m-%d')
+        from_date = (now_ist - timedelta(days=days)).strftime('%Y-%m-%d')
+
+        encoded_key = urllib.parse.quote(instrument_key, safe='')
+        url_path = f"{BASE_URL}/v2/historical-candle/{encoded_key}/1minute/{from_date}/{to_date}"
+        data = http_get(url_path, headers={"Accept":"application/json"}, timeout=15, retries=3)
         candles_1min = None
-        if isinstance(data, dict):
-            if 'data' in data and isinstance(data['data'], dict) and 'candles' in data['data']:
-                candles_1min = data['data']['candles']
-            elif 'candles' in data:
-                candles_1min = data['candles']
-            elif isinstance(data.get('data'), list):
-                candles_1min = data['data']
-        elif isinstance(data, list):
-            candles_1min = data
-        if not candles_1min:
+        if data:
+            if isinstance(data, dict):
+                if data.get('status') in ('success', True) and 'data' in data and 'candles' in data['data']:
+                    candles_1min = data['data']['candles']
+                elif 'candles' in data:
+                    candles_1min = data['candles']
+                elif isinstance(data.get('data'), list):
+                    candles_1min = data['data']
+            elif isinstance(data, list):
+                candles_1min = data
+        if candles_1min:
+            return resample_to_5min(candles_1min)[:500]
+
+        print("  Path-style historical failed — trying query-style...")
+        url_query = f"{BASE_URL}/v2/historical-candle"
+        params = {"instrument_key": instrument_key, "interval":"1minute", "from_date": from_date, "to_date": to_date}
+        data2 = http_get(url_query, headers=HEADERS, params=params, timeout=15, retries=3)
+        if not data2:
             return []
-        return resample_to_5min(candles_1min)[:500]
+        if isinstance(data2, dict):
+            if data2.get('status') in ('success', True) and 'data' in data2 and 'candles' in data2['data']:
+                candles_1min = data2['data']['candles']
+            elif 'candles' in data2:
+                candles_1min = data2['candles']
+            elif isinstance(data2.get('data'), list):
+                candles_1min = data2['data']
+        elif isinstance(data2, list):
+            candles_1min = data2
+        if candles_1min:
+            return resample_to_5min(candles_1min)[:500]
+        return []
     except Exception as e:
         print("  Error fetching historical candles:", e)
         return []
@@ -218,10 +256,8 @@ def get_historical_candles(instrument_key, interval="1minute", days=5):
 # ======================== OPTION CHAIN & GREEKS ========================
 
 def get_next_expiry():
-    """Get next Thursday expiry date (in IST). Keeps original simple behavior."""
     today = get_ist_now()
-    # Thursday is weekday() == 3 (Mon=0)
-    days_ahead = 3 - today.weekday()
+    days_ahead = 3 - today.weekday()  # Thursday = 3 (Mon=0)
     if days_ahead <= 0:
         days_ahead += 7
     next_thursday = today + timedelta(days=days_ahead)
@@ -229,11 +265,12 @@ def get_next_expiry():
 
 def get_option_contracts():
     """
-    Fetch option contracts for NIFTY for the chosen expiry.
-    Tries pagination if supported.
+    Fetch option contracts for NIFTY for chosen expiry.
+    Uses pagination heuristics and prints response body for debugging.
     """
     try:
         expiry = get_next_expiry()
+        print(f"  Looking up option contracts for expiry {expiry} ...")
         url = f"{BASE_URL}/v2/option/contract"
         all_contracts = []
         page = 1
@@ -245,18 +282,13 @@ def get_option_contracts():
                 break
             payload = None
             if isinstance(data, dict):
-                # common shape
                 if data.get('status') and isinstance(data.get('data'), list):
                     payload = data['data']
                 elif isinstance(data.get('data'), dict) and 'contracts' in data['data']:
                     payload = data['data']['contracts']
                 elif isinstance(data.get('data'), list):
                     payload = data['data']
-                elif isinstance(data.get('data'), dict):
-                    # sometimes single contract
-                    payload = [data['data']]
                 else:
-                    # fallback: entire response might be list
                     for k in ['data','contracts','result']:
                         if k in data and isinstance(data[k], list):
                             payload = data[k]
@@ -266,12 +298,10 @@ def get_option_contracts():
             if not payload:
                 break
             all_contracts.extend(payload)
-            # pagination heuristics
             if len(payload) < page_size:
                 break
             page += 1
             time.sleep(0.15)
-        # sanitize
         all_contracts = [c for c in all_contracts if isinstance(c, dict) and c.get('instrument_key')]
         return all_contracts
     except Exception as e:
@@ -280,8 +310,7 @@ def get_option_contracts():
 
 def get_option_greeks(instrument_keys):
     """
-    Fetch option Greeks for up to 50 keys at once.
-    Returns dict: instrument_key -> greek-data
+    Fetch Greeks (max 50 per call). Normalizes common aliases.
     """
     try:
         if not instrument_keys:
@@ -296,12 +325,9 @@ def get_option_greeks(instrument_keys):
         if isinstance(data, dict):
             payload = data.get('data') or data
             if isinstance(payload, dict):
-                # payload may be mapping
                 for k, v in payload.items():
                     if isinstance(v, dict):
-                        # normalize known fields
                         normalized = dict(v)
-                        # add possible aliases
                         if 'ltp' in v and 'last_price' not in v:
                             normalized['last_price'] = v['ltp']
                         if 'open_interest' in v and 'oi' not in v:
@@ -326,9 +352,8 @@ def get_option_greeks(instrument_keys):
         return {}
 
 def get_instrument_ltp(instrument_key):
-    """Fetch LTP/quote for instrument if possible."""
     try:
-        url = f"{BASE_URL}/v2/market/quote/{instrument_key}"
+        url = f"{BASE_URL}/v2/market/quote/{urllib.parse.quote(instrument_key, safe='')}"
         data = http_get(url, headers=HEADERS, timeout=10, retries=2)
         if not data:
             return None
@@ -338,7 +363,6 @@ def get_instrument_ltp(instrument_key):
                 for k in ('ltp','last_price','lastTradedPrice','last'):
                     if k in d and d[k] is not None:
                         return float(d[k])
-                # nested
                 if 'market_data' in d and isinstance(d['market_data'], dict):
                     md = d['market_data']
                     for k in ('ltp','last_price'):
@@ -351,25 +375,25 @@ def get_instrument_ltp(instrument_key):
 
 def get_option_chain_data():
     """
-    Build option chain with combined Greeks.
-    Returns a list of strike dicts like original: [{strike_price, call, put}, ...]
+    Build option chain. Returns dict: {'strikes': [...], 'atm_index': int, 'underlying_ltp': float}
     """
     try:
         print("  Getting option contracts...")
         contracts = get_option_contracts()
         if not contracts:
             print("  ⚠️ No contracts found")
-            return []
+            return {}
+        print(f"  Got {len(contracts)} contracts")
         instrument_keys = [c.get('instrument_key') for c in contracts if c.get('instrument_key')]
         all_greeks = {}
-        print(f"  Fetching Greeks in batches for {len(instrument_keys)} instruments...")
+        print(f"  Fetching Greeks for {len(instrument_keys)} instruments (batches)...")
         for i in range(0, len(instrument_keys), 50):
             batch = instrument_keys[i:i+50]
             greeks = get_option_greeks(batch)
             if greeks:
                 all_greeks.update(greeks)
             time.sleep(0.25)
-        # build option entries
+        print(f"  Got Greeks for {len(all_greeks)} instruments (collected)")
         option_chain = []
         for c in contracts:
             key = c.get('instrument_key')
@@ -381,7 +405,6 @@ def get_option_chain_data():
                 'option_type': 'CE' if option_type in ('CE','CALL') else ('PE' if option_type in ('PE','PUT') else option_type)
             }
             g = all_greeks.get(key, {})
-            # merge
             opt = dict(base)
             opt.update({
                 'last_price': float(g.get('last_price') or g.get('ltp') or 0),
@@ -394,7 +417,6 @@ def get_option_chain_data():
                 'iv': float(g.get('iv') or g.get('implied_volatility') or 0)
             })
             option_chain.append(opt)
-        # group by strike
         strikes = {}
         for opt in option_chain:
             s = opt['strike_price']
@@ -406,24 +428,25 @@ def get_option_chain_data():
                 strikes[s]['call'] = opt
             elif opt['option_type'] == 'PE':
                 strikes[s]['put'] = opt
-        result = sorted(strikes.values(), key=lambda x: x['strike_price'])
-        return result
+        sorted_strikes = sorted(strikes.values(), key=lambda x: x['strike_price'])
+        underlying_ltp = get_instrument_ltp(NIFTY_INDEX_KEY)
+        if underlying_ltp is not None and len(sorted_strikes) > 0:
+            atm_index = min(range(len(sorted_strikes)), key=lambda i: abs(sorted_strikes[i]['strike_price'] - underlying_ltp))
+            print(f"  Underlying LTP: {underlying_ltp:.2f} — ATM approx strike: {sorted_strikes[atm_index]['strike_price']}")
+        else:
+            atm_index = len(sorted_strikes)//2
+            print("  Could not determine underlying LTP — using mid-index as ATM fallback.")
+        return {"strikes": sorted_strikes, "atm_index": atm_index, "underlying_ltp": underlying_ltp}
     except Exception as e:
         print("  Error building option chain:", e)
-        return []
+        return {}
 
-# ======================== CHARTING ========================
+# ======================== CHART CREATION ========================
 
 def create_candlestick_chart(candles, title, show_volume=False):
-    """
-    Create a candlestick PNG in-memory (BytesIO).
-    candles: list of [timestamp, open, high, low, close, volume, oi]
-    Returns BytesIO or None.
-    """
     if not candles:
         return None
     try:
-        # infer columns
         has_oi = len(candles[0]) >= 7
         has_vol = len(candles[0]) >= 6
         cols = ['timestamp','open','high','low','close']
@@ -435,7 +458,6 @@ def create_candlestick_chart(candles, title, show_volume=False):
         if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
             df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.sort_values('timestamp').reset_index(drop=True)
-        # figure size
         if show_volume and 'volume' in df.columns:
             fig, (ax1, ax2) = plt.subplots(2,1, figsize=(16,10), gridspec_kw={'height_ratios':[3,1]})
         else:
@@ -450,12 +472,14 @@ def create_candlestick_chart(candles, title, show_volume=False):
             ax1.add_patch(rect)
             ax1.plot([idx, idx], [row['low'], row['high']], color=color, linewidth=1.2, solid_capstyle='round')
         ax1.set_xlim(-1, len(df))
-        y_margin = (df['high'].max() - df['low'].min()) * 0.05 if len(df) > 1 else 1
+        if len(df) > 1:
+            y_margin = (df['high'].max() - df['low'].min()) * 0.05
+        else:
+            y_margin = 1
         ax1.set_ylim(df['low'].min() - y_margin, df['high'].max() + y_margin)
         ax1.set_title(title, fontsize=16, fontweight='bold', pad=12)
         ax1.set_ylabel('Price (₹)', fontsize=12)
         ax1.grid(True, alpha=0.2, linestyle='--', linewidth=0.5)
-        # xticks
         step = max(len(df)//12, 1)
         xticks = list(range(0, len(df), step))
         xticklabels = [df.iloc[i]['timestamp'].strftime('%d %b\n%H:%M') for i in xticks]
@@ -483,7 +507,7 @@ def create_candlestick_chart(candles, title, show_volume=False):
         print("  Error creating chart:", e)
         return None
 
-# ======================== FORMATTING / MARKET STATUS ========================
+# ======================== FORMATTING ========================
 
 def format_market_status():
     now = get_ist_now()
@@ -505,45 +529,29 @@ def format_market_status():
         return f"{status}\n⚠️ After hours\n🕐 {time_str}"
     return f"{status}\n🕐 {time_str}"
 
-def format_option_chain_message(option_data):
-    """
-    Accepts both old-style list (strikes list) and new dict optionally.
-    If input is list of strike dicts (old), show ATM as middle.
-    """
-    if not option_data:
+def format_option_chain_message(option_payload):
+    if not option_payload or 'strikes' not in option_payload:
         return "❌ Option chain data not available"
+    strikes = option_payload['strikes']
+    atm_index = option_payload.get('atm_index', len(strikes)//2)
+    underlying_ltp = option_payload.get('underlying_ltp')
     now = get_ist_now()
     text = "📊 *NIFTY 50 OPTION CHAIN* 📊\n\n"
     text += f"⏰ {now.strftime('%d %b %Y, %I:%M:%S %p IST')}\n"
     text += f"📅 Expiry: {get_next_expiry()}\n"
-    # detect structure
-    strikes = None
-    atm_idx = None
-    underlying = None
-    if isinstance(option_data, dict) and 'strikes' in option_data:
-        strikes = option_data['strikes']
-        atm_idx = option_data.get('atm_index', len(strikes)//2)
-        underlying = option_data.get('underlying_ltp')
-    elif isinstance(option_data, list):
-        strikes = option_data
-        atm_idx = len(strikes)//2
-    else:
-        return "❌ Unexpected option data shape"
-
     text += f"📈 Total Strikes: {len(strikes)}\n"
-    if underlying:
-        text += f"📌 Underlying LTP: ₹{underlying:.2f}\n"
+    if underlying_ltp:
+        text += f"📌 Underlying LTP: ₹{underlying_ltp:.2f}\n"
     text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-    start = max(0, atm_idx - 10)
-    end = min(len(strikes), atm_idx + 11)
+    start = max(0, atm_index - 10)
+    end = min(len(strikes), atm_index + 11)
     for i in range(start, end):
         s = strikes[i]
         strike = s.get('strike_price', 'N/A')
-        is_atm = (i == atm_idx)
+        is_atm = (i == atm_index)
         text += f"*Strike: {strike}* {'🔹 ATM' if is_atm else ''}\n"
-        call = s.get('call') or s.get('CE') or s.get('Call')
-        put = s.get('put') or s.get('PE') or s.get('Put')
+        call = s.get('call')
+        put = s.get('put')
         if call:
             try:
                 iv_c = float(call.get('iv', 0)) * 100
@@ -559,12 +567,11 @@ def format_option_chain_message(option_data):
         text += "\n"
     return text
 
-# ======================== TELEGRAM SENDING (async) ========================
+# ======================== TELEGRAM HELPERS ========================
 
 async def send_telegram_message(message):
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        # Telegram max 4096 per message
         if len(message) > 4096:
             parts = [message[i:i+4096] for i in range(0, len(message), 4096)]
             for part in parts:
@@ -581,7 +588,6 @@ async def send_telegram_photo(photo, caption, retries=3):
     for attempt in range(retries):
         try:
             bot = Bot(token=TELEGRAM_BOT_TOKEN)
-            # telegram python-bot expects file-like or bytes
             if isinstance(photo, io.BytesIO):
                 photo.seek(0)
                 await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo, caption=caption, parse_mode='Markdown')
@@ -599,53 +605,53 @@ async def send_telegram_photo(photo, caption, retries=3):
             return False
     return False
 
-# ======================== MAIN ========================
+# ======================== MAIN FLOW ========================
 
 async def main():
     print("\n" + "="*60)
     print("🚀 UPSTOX MARKET DATA BOT (FULL) - START")
     print("="*60 + "\n")
-    # Credentials check
     if UPSTOX_ACCESS_TOKEN == "your_access_token":
         print("❌ Set UPSTOX_ACCESS_TOKEN environment var or edit file.")
         return
     if TELEGRAM_BOT_TOKEN == "your_telegram_bot_token":
         print("❌ Set TELEGRAM_BOT_TOKEN environment var or edit file.")
         return
+
     market_status = format_market_status()
     print(market_status, "\n")
     now = get_ist_now()
     welcome = f"🎯 *Market Data Update*\n\n{market_status}\n⏰ {now.strftime('%d %b %Y, %I:%M:%S %p')}\n\nFetching Upstox V2 API data..."
     await send_telegram_message(welcome)
 
-    # 1) NIFTY Index
+    # 1. NIFTY Index
     print("📈 Fetching NIFTY 50 Index data...")
     nifty_candles = get_intraday_candles(NIFTY_INDEX_KEY)
     if not nifty_candles or len(nifty_candles) < 5:
         print("  No intraday, trying historical...")
         nifty_candles = get_historical_candles(NIFTY_INDEX_KEY, "1minute", 3)
-    if nifty_candles:
+    if nifty_candles and len(nifty_candles) > 0:
         print(f"  ✅ Got {len(nifty_candles)} 5-min candles")
         chart = create_candlestick_chart(nifty_candles, "NIFTY 50 - 5 Minute Chart", show_volume=True)
         if chart:
             await send_telegram_photo(chart, f"📊 *NIFTY 50 Index*\n{len(nifty_candles)} candles (5-min)")
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(2)
     else:
         await send_telegram_message("⚠️ NIFTY 50 data unavailable")
 
-    # 2) Option Chain
+    # 2. Option Chain
     print("\n📊 Fetching Option Chain...")
-    option_chain = get_option_chain_data()
-    if option_chain and len(option_chain) > 0:
-        print(f"  ✅ Got {len(option_chain)} strikes")
-        msg = format_option_chain_message(option_chain)
+    option_chain_payload = get_option_chain_data()
+    if option_chain_payload and option_chain_payload.get('strikes'):
+        print(f"  ✅ Got {len(option_chain_payload['strikes'])} strikes")
+        msg = format_option_chain_message(option_chain_payload)
         await send_telegram_message(msg)
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(1.5)
     else:
         print("  ⚠️ Option chain unavailable")
         await send_telegram_message("⚠️ Option chain data unavailable or empty")
 
-    # 3) Nifty 50 Stocks (first 10)
+    # 3. Stocks (first 10)
     print("\n📈 Fetching Nifty 50 Stocks (first 10)...")
     successful_charts = 0
     for idx, (name, key) in enumerate(list(NIFTY_50_STOCKS.items())[:10], 1):
@@ -669,12 +675,14 @@ async def main():
     now = get_ist_now()
     summary = f"\n✅ *Update Complete!*\n\n"
     summary += f"{market_status}\n\n"
-    summary += f"📊 Results:\n  • NIFTY 50: {'✅' if nifty_candles else '❌'}\n"
-    summary += f"  • Option Chain: {len(option_chain) if option_chain else 0} strikes\n"
+    summary += f"📊 Results:\n"
+    summary += f"  • NIFTY 50: {'✅' if nifty_candles and len(nifty_candles)>0 else '❌'}\n"
+    summary += f"  • Option Chain: {len(option_chain_payload.get('strikes', [])) if option_chain_payload else 0} strikes\n"
     summary += f"  • Stocks: {successful_charts}/10 charts\n\n"
     summary += f"⏰ {now.strftime('%I:%M:%S %p IST')}\n"
     summary += f"🔄 V2 API (1min→5min resampled)"
     await send_telegram_message(summary)
+
     print("\n" + "="*60)
     print(f"✅ COMPLETED! {successful_charts} charts sent")
     print("="*60 + "\n")
@@ -682,10 +690,10 @@ async def main():
 if __name__ == "__main__":
     print("🔧 Checking dependencies...")
     try:
-        import pandas
-        import matplotlib
-        from telegram import Bot
-        import pytz
+        import pandas  # noqa
+        import matplotlib  # noqa
+        from telegram import Bot  # noqa
+        import pytz  # noqa
         print("✅ All dependencies loaded!\n")
     except ImportError as e:
         print(f"❌ Missing dependency: {e}")
