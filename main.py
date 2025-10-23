@@ -145,13 +145,15 @@ def get_spot_price(instrument_key):
         logger.error(f"Error getting spot price: {e}")
         return None
 
-def get_intraday_candles(instrument_key, interval="5minute"):
-    """Fetch intraday candles (current day)"""
+def get_intraday_candles(instrument_key, interval="30minute"):
+    """Fetch intraday candles (current day) - NO Authorization needed!"""
     try:
         encoded_key = urllib.parse.quote(instrument_key, safe='')
         url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/{interval}"
         
-        data = http_get_with_retry(url, timeout=15, retries=2)
+        # Intraday endpoint ला Authorization नाही लागत!
+        headers_no_auth = {"Accept": "application/json"}
+        data = http_get_with_retry(url, headers=headers_no_auth, timeout=15, retries=2)
         
         if not data:
             return []
