@@ -194,7 +194,11 @@ def get_next_weekly_expiry():
     return next_thursday.strftime('%Y-%m-%d')
 
 def get_option_chain_data(instrument_key="NSE_INDEX|Nifty 50"):
-    """Fetch option chain - Requires Authorization"""
+    """
+    Fetch option chain using ALTERNATIVE method:
+    1. First try /v2/option/chain (direct)
+    2. If empty, use /v2/option/contract + /v2/option/greek (build manually)
+    """
     try:
         headers = {
             "Accept": "application/json",
@@ -202,22 +206,9 @@ def get_option_chain_data(instrument_key="NSE_INDEX|Nifty 50"):
         }
         
         expiry = get_next_weekly_expiry()
-        encoded_key = urllib.parse.quote(instrument_key, safe='')
-        url = f"{BASE_URL}/v2/option/chain?instrument_key={encoded_key}&expiry_date={expiry}"
+        logger.info(f"📅 Target expiry: {expiry}")
         
-        logger.info(f"📊 Option chain URL: {url[:120]}")
-        logger.info(f"📅 Expiry date: {expiry}")
-        
-        data = http_get_with_retry(url, headers=headers, timeout=20, retries=2)
-        
-        if not data:
-            logger.error("❌ Option chain API returned None")
-            return None
-        
-        logger.info(f"✅ Got response from option chain API")
-        logger.info(f"📦 Response keys: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}")
-        
-        # Get spot price
+        # Get spot price first
         spot_price = get_spot_price(instrument_key)
         if spot_price:
             logger.info(f"💰 Spot price: {spot_price}")
@@ -225,130 +216,127 @@ def get_option_chain_data(instrument_key="NSE_INDEX|Nifty 50"):
             logger.warning("⚠️ Could not fetch spot price")
             spot_price = 0
         
-        # Parse strikes - try multiple response formats
-        strikes_data = []
+        # METHOD 1: Try direct option chain API
+        logger.info("🔍 Trying METHOD 1: Direct option chain API")
+        encoded_key = urllib.parse.quote(instrument_key, safe='')
+        url = f"{BASE_URL}/v2/option/chain?instrument_key={encoded_key}&expiry_date={expiry}"
         
-        if isinstance(data, dict):
-            # Try data.data
+        data = http_get_with_retry(url, headers=headers, timeout=20, retries=2)
+        
+        if data and isinstance(data, dict):
+            logger.info(f"📦 Response keys: {list(data.keys())}")
+            
+            # Try to extract strikes
+            strikes_data = []
             if 'data' in data:
                 payload = data['data']
-                logger.info(f"📊 Found 'data' key, type: {type(payload)}")
-                
-                if isinstance(payload, list):
+                if isinstance(payload, list) and len(payload) > 0:
                     strikes_data = payload
-                    logger.info(f"✅ Direct list in data: {len(strikes_data)} items")
+                    logger.info(f"✅ Found {len(strikes_data)} items in data")
                 elif isinstance(payload, dict):
-                    # Try data.data.data
-                    if 'data' in payload:
-                        strikes_data = payload['data']
-                        logger.info(f"✅ Found data.data.data: {len(strikes_data) if isinstance(strikes_data, list) else 'not list'}")
-                    # Try data.data.strikes
-                    elif 'strikes' in payload:
-                        strikes_data = payload['strikes']
-                        logger.info(f"✅ Found data.data.strikes: {len(strikes_data) if isinstance(strikes_data, list) else 'not list'}")
-                    # Try data.data.option_chain
-                    elif 'option_chain' in payload:
-                        strikes_data = payload['option_chain']
-                        logger.info(f"✅ Found data.data.option_chain: {len(strikes_data) if isinstance(strikes_data, list) else 'not list'}")
+                    for key in ['data', 'strikes', 'option_chain']:
+                        if key in payload and isinstance(payload[key], list) and len(payload[key]) > 0:
+                            strikes_data = payload[key]
+                            logger.info(f"✅ Found {len(strikes_data)} items in data.{key}")
+                            break
             
-            # Try direct strikes key
-            if not strikes_data and 'strikes' in data:
-                strikes_data = data['strikes']
-                logger.info(f"✅ Found direct strikes: {len(strikes_data) if isinstance(strikes_data, list) else 'not list'}")
+            # If we got valid strikes data from Method 1
+            if strikes_data and len(strikes_data) > 0:
+                logger.info("✅ METHOD 1 SUCCESS - Processing direct option chain")
+                return process_option_chain_strikes(strikes_data, spot_price, expiry)
         
-        elif isinstance(data, list):
-            strikes_data = data
-            logger.info(f"✅ Direct list response: {len(strikes_data)} items")
+        logger.warning("⚠️ METHOD 1 failed or returned empty - Trying METHOD 2")
         
-        if not strikes_data or not isinstance(strikes_data, list):
-            logger.error(f"❌ No valid strikes data found. Type: {type(strikes_data)}")
-            # Print first item for debugging
-            if strikes_data:
-                logger.info(f"📝 Sample data: {str(strikes_data)[:300]}")
+        # METHOD 2: Build option chain from contracts + greeks
+        logger.info("🔍 Trying METHOD 2: Building from contracts + greeks")
+        
+        # Get all option contracts for expiry
+        url_contracts = f"{BASE_URL}/v2/option/contract?instrument_key={encoded_key}&expiry_date={expiry}"
+        logger.info(f"📡 Fetching contracts: {url_contracts[:120]}")
+        
+        contracts_data = http_get_with_retry(url_contracts, headers=headers, timeout=20, retries=2)
+        
+        if not contracts_data:
+            logger.error("❌ No contracts data received")
             return None
         
-        logger.info(f"🎯 Processing {len(strikes_data)} strike items...")
+        # Extract contracts list
+        contracts = []
+        if isinstance(contracts_data, dict) and 'data' in contracts_data:
+            contracts = contracts_data['data']
+        elif isinstance(contracts_data, list):
+            contracts = contracts_data
         
-        # Process strikes
+        if not contracts or len(contracts) == 0:
+            logger.error(f"❌ No contracts found for expiry {expiry}")
+            return None
+        
+        logger.info(f"✅ Got {len(contracts)} option contracts")
+        
+        # Get market data via Greeks API (batches of 50)
+        logger.info("📊 Fetching Greeks data in batches...")
+        instrument_keys = [c['instrument_key'] for c in contracts if 'instrument_key' in c]
+        
+        all_greeks = {}
+        for i in range(0, len(instrument_keys), 50):
+            batch = instrument_keys[i:i+50]
+            batch_str = ",".join(batch)
+            
+            url_greeks = f"{BASE_URL}/v2/option/greek?instrument_key={urllib.parse.quote(batch_str, safe='')}"
+            greeks_data = http_get_with_retry(url_greeks, headers=headers, timeout=15, retries=2)
+            
+            if greeks_data and isinstance(greeks_data, dict) and 'data' in greeks_data:
+                all_greeks.update(greeks_data['data'])
+                logger.info(f"✅ Batch {i//50 + 1}: Got {len(greeks_data['data'])} Greeks")
+            
+            time.sleep(0.3)  # Rate limit
+        
+        logger.info(f"📊 Total Greeks data: {len(all_greeks)} instruments")
+        
+        # Build strike dictionary
         strikes_dict = {}
-        processed_count = 0
+        processed = 0
         
-        for item in strikes_data:
-            if not isinstance(item, dict):
-                continue
-            
-            # Try to extract strike price
-            strike_price = None
-            for key in ['strike_price', 'strike', 'strikePrice', 'Strike']:
-                if key in item:
-                    strike_price = item[key]
-                    break
-            
-            if not strike_price:
-                continue
-            
+        for contract in contracts:
             try:
-                strike_price = float(strike_price)
-            except:
+                instrument_key_contract = contract.get('instrument_key', '')
+                strike_price = float(contract.get('strike_price', 0))
+                option_type = contract.get('option_type', '').upper()
+                
+                if strike_price == 0:
+                    continue
+                
+                # Get market data from Greeks
+                greek_data = all_greeks.get(instrument_key_contract, {})
+                
+                if strike_price not in strikes_dict:
+                    strikes_dict[strike_price] = {'strike_price': strike_price, 'call': None, 'put': None}
+                
+                option_data = {
+                    'last_price': float(greek_data.get('last_price', greek_data.get('ltp', 0))),
+                    'oi': int(greek_data.get('oi', greek_data.get('open_interest', 0))),
+                    'volume': int(greek_data.get('volume', 0)),
+                    'delta': float(greek_data.get('delta', 0)),
+                    'theta': float(greek_data.get('theta', 0)),
+                    'gamma': float(greek_data.get('gamma', 0)),
+                    'vega': float(greek_data.get('vega', 0)),
+                    'iv': float(greek_data.get('iv', greek_data.get('implied_volatility', 0)))
+                }
+                
+                if option_type in ['CE', 'CALL']:
+                    strikes_dict[strike_price]['call'] = option_data
+                    processed += 1
+                elif option_type in ['PE', 'PUT']:
+                    strikes_dict[strike_price]['put'] = option_data
+                    processed += 1
+                    
+            except Exception as e:
                 continue
-            
-            if strike_price not in strikes_dict:
-                strikes_dict[strike_price] = {'strike_price': strike_price, 'call': None, 'put': None}
-            
-            # Process CE/PE - try multiple formats
-            call_data = None
-            put_data = None
-            
-            # Format 1: call_options, put_options
-            if 'call_options' in item:
-                call_data = item['call_options']
-            elif 'call' in item:
-                call_data = item['call']
-            elif 'CE' in item:
-                call_data = item['CE']
-            
-            if 'put_options' in item:
-                put_data = item['put_options']
-            elif 'put' in item:
-                put_data = item['put']
-            elif 'PE' in item:
-                put_data = item['PE']
-            
-            # Process CALL
-            if call_data and isinstance(call_data, dict):
-                md = call_data.get('market_data', call_data)
-                greeks = call_data.get('option_greeks', {})
-                
-                strikes_dict[strike_price]['call'] = {
-                    'last_price': float(md.get('ltp', md.get('last_price', 0))),
-                    'oi': int(md.get('oi', md.get('open_interest', 0))),
-                    'volume': int(md.get('volume', 0)),
-                    'delta': float(greeks.get('delta', 0)),
-                    'theta': float(greeks.get('theta', 0)),
-                    'iv': float(greeks.get('iv', greeks.get('implied_volatility', 0)))
-                }
-                processed_count += 1
-            
-            # Process PUT
-            if put_data and isinstance(put_data, dict):
-                md = put_data.get('market_data', put_data)
-                greeks = put_data.get('option_greeks', {})
-                
-                strikes_dict[strike_price]['put'] = {
-                    'last_price': float(md.get('ltp', md.get('last_price', 0))),
-                    'oi': int(md.get('oi', md.get('open_interest', 0))),
-                    'volume': int(md.get('volume', 0)),
-                    'delta': float(greeks.get('delta', 0)),
-                    'theta': float(greeks.get('theta', 0)),
-                    'iv': float(greeks.get('iv', greeks.get('implied_volatility', 0)))
-                }
-                processed_count += 1
         
-        logger.info(f"✅ Processed {processed_count} option contracts")
-        logger.info(f"📊 Unique strikes: {len(strikes_dict)}")
+        logger.info(f"✅ Processed {processed} options, {len(strikes_dict)} unique strikes")
         
         if not strikes_dict:
-            logger.error("❌ No strikes were processed successfully")
+            logger.error("❌ No strikes processed")
             return None
         
         sorted_strikes = sorted(strikes_dict.values(), key=lambda x: x['strike_price'])
@@ -371,6 +359,82 @@ def get_option_chain_data(instrument_key="NSE_INDEX|Nifty 50"):
         
     except Exception as e:
         logger.error(f"❌ Option chain error: {e}", exc_info=True)
+        return None
+
+def process_option_chain_strikes(strikes_data, spot_price, expiry):
+    """Process strikes from direct option chain API"""
+    try:
+        strikes_dict = {}
+        processed_count = 0
+        
+        for item in strikes_data:
+            if not isinstance(item, dict):
+                continue
+            
+            # Extract strike price
+            strike_price = None
+            for key in ['strike_price', 'strike', 'strikePrice']:
+                if key in item:
+                    strike_price = float(item[key])
+                    break
+            
+            if not strike_price:
+                continue
+            
+            if strike_price not in strikes_dict:
+                strikes_dict[strike_price] = {'strike_price': strike_price, 'call': None, 'put': None}
+            
+            # Process CE/PE
+            call_data = item.get('call_options', item.get('call', item.get('CE')))
+            put_data = item.get('put_options', item.get('put', item.get('PE')))
+            
+            if call_data and isinstance(call_data, dict):
+                md = call_data.get('market_data', call_data)
+                greeks = call_data.get('option_greeks', {})
+                
+                strikes_dict[strike_price]['call'] = {
+                    'last_price': float(md.get('ltp', md.get('last_price', 0))),
+                    'oi': int(md.get('oi', md.get('open_interest', 0))),
+                    'volume': int(md.get('volume', 0)),
+                    'delta': float(greeks.get('delta', 0)),
+                    'theta': float(greeks.get('theta', 0)),
+                    'iv': float(greeks.get('iv', greeks.get('implied_volatility', 0)))
+                }
+                processed_count += 1
+            
+            if put_data and isinstance(put_data, dict):
+                md = put_data.get('market_data', put_data)
+                greeks = put_data.get('option_greeks', {})
+                
+                strikes_dict[strike_price]['put'] = {
+                    'last_price': float(md.get('ltp', md.get('last_price', 0))),
+                    'oi': int(md.get('oi', md.get('open_interest', 0))),
+                    'volume': int(md.get('volume', 0)),
+                    'delta': float(greeks.get('delta', 0)),
+                    'theta': float(greeks.get('theta', 0)),
+                    'iv': float(greeks.get('iv', greeks.get('implied_volatility', 0)))
+                }
+                processed_count += 1
+        
+        logger.info(f"✅ Processed {processed_count} options from {len(strikes_dict)} strikes")
+        
+        sorted_strikes = sorted(strikes_dict.values(), key=lambda x: x['strike_price'])
+        
+        # Find ATM
+        atm_index = len(sorted_strikes) // 2
+        if spot_price and sorted_strikes:
+            atm_index = min(range(len(sorted_strikes)), 
+                          key=lambda i: abs(sorted_strikes[i]['strike_price'] - spot_price))
+        
+        return {
+            'strikes': sorted_strikes,
+            'atm_index': atm_index,
+            'spot_price': spot_price,
+            'expiry': expiry
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing strikes: {e}")
         return None
 
 # ======================== CHART CREATION ========================
