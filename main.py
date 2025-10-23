@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# nifty50_options_with_charts.py - Option Chain + 5min Candlestick Charts (7 days)
+# nifty50_upstox_complete.py - Option Chain + Charts (Pure Upstox API)
 
 import os
 import asyncio
@@ -59,13 +59,13 @@ NIFTY50_STOCKS = {
     "NSE_EQ|INE669E01016": "DMART",
 }
 
-print("🚀 NIFTY 50 OPTIONS + CHARTS MONITOR")
-print(f"📊 Tracking {len(NIFTY50_STOCKS)} stocks")
-print(f"📈 5min Candlestick Charts (7 days)")
-print(f"⏰ Updates every 5 minutes")
+print("🚀 NIFTY 50 UPSTOX MONITOR")
+print(f"📊 {len(NIFTY50_STOCKS)} stocks")
+print(f"📈 Upstox API - Option Chain + Charts")
+print(f"⏰ Every 5 minutes")
 
 def get_expiries(instrument_key):
-    """Get expiries for a stock"""
+    """Get expiries"""
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
@@ -92,7 +92,7 @@ def get_expiries(instrument_key):
     return []
 
 def get_next_expiry(instrument_key):
-    """Get next valid expiry"""
+    """Get next expiry"""
     expiries = get_expiries(instrument_key)
     if not expiries:
         today = datetime.now(IST)
@@ -109,7 +109,7 @@ def get_next_expiry(instrument_key):
     return expiries[0]
 
 def get_option_chain(instrument_key, expiry):
-    """Get option chain data"""
+    """Get option chain"""
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
@@ -152,52 +152,104 @@ def get_spot_price(instrument_key):
     
     return 0
 
-def get_historical_data_yfinance(symbol):
-    """Get historical data from Yahoo Finance as fallback"""
+def get_historical_candles(instrument_key, symbol):
+    """Get historical candle data from Upstox - ALL POSSIBLE FORMATS"""
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
+    }
+    
+    encoded_key = urllib.parse.quote(instrument_key, safe='')
+    
+    # Try multiple Upstox API endpoints
+    
+    # 1. Try intraday endpoint
     try:
-        import yfinance as yf
+        url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/5minute"
+        print(f"  🔍 Trying: intraday endpoint...")
+        resp = requests.get(url, headers=headers, timeout=15)
         
-        # Yahoo Finance symbol format for NSE stocks
-        ticker = f"{symbol}.NS"
-        
-        # Get last 7 days of 5min data
-        stock = yf.Ticker(ticker)
-        
-        # Download 5min data for last 7 days
-        hist = stock.history(period="7d", interval="5m")
-        
-        if hist.empty:
-            return []
-        
-        # Convert to format similar to Upstox
-        candles = []
-        for idx, row in hist.iterrows():
-            # Format: [timestamp, open, high, low, close, volume, oi]
-            candle = [
-                idx.isoformat(),
-                row['Open'],
-                row['High'],
-                row['Low'],
-                row['Close'],
-                row['Volume'],
-                0  # OI not available in yfinance
-            ]
-            candles.append(candle)
-        
-        return candles
-    except ImportError:
-        print("  ⚠️ yfinance not installed. Run: pip install yfinance")
-        return []
+        if resp.status_code == 200:
+            data = resp.json()
+            candles = data.get('data', {}).get('candles', [])
+            if candles:
+                print(f"  ✅ Intraday: {len(candles)} candles")
+                return candles
+        else:
+            print(f"  ⚠️ Intraday: HTTP {resp.status_code}")
     except Exception as e:
-        print(f"  ⚠️ Yahoo Finance error: {e}")
-        return []
+        print(f"  ⚠️ Intraday error: {e}")
+    
+    # 2. Try date-based endpoint (today)
+    try:
+        to_date = datetime.now(IST).strftime('%Y-%m-%d')
+        url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/5minute/{to_date}"
+        print(f"  🔍 Trying: date endpoint (today)...")
+        resp = requests.get(url, headers=headers, timeout=15)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            candles = data.get('data', {}).get('candles', [])
+            if candles:
+                print(f"  ✅ Today: {len(candles)} candles")
+                return candles
+        else:
+            print(f"  ⚠️ Today: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"  ⚠️ Today error: {e}")
+    
+    # 3. Try with date range (7 days)
+    try:
+        to_date = datetime.now(IST)
+        from_date = to_date - timedelta(days=7)
+        
+        to_str = to_date.strftime('%Y-%m-%d')
+        from_str = from_date.strftime('%Y-%m-%d')
+        
+        url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/5minute/{to_str}/{from_str}"
+        print(f"  🔍 Trying: date range (7 days)...")
+        resp = requests.get(url, headers=headers, timeout=15)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            candles = data.get('data', {}).get('candles', [])
+            if candles:
+                print(f"  ✅ Range: {len(candles)} candles")
+                return candles
+        else:
+            print(f"  ⚠️ Range: HTTP {resp.status_code}")
+            # Print response for debugging
+            if resp.status_code == 400:
+                print(f"  📄 Response: {resp.text[:200]}")
+    except Exception as e:
+        print(f"  ⚠️ Range error: {e}")
+    
+    # 4. Try different interval formats
+    for interval in ['5m', '5min', '5']:
+        try:
+            url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/{interval}/{to_date}"
+            print(f"  🔍 Trying: interval={interval}...")
+            resp = requests.get(url, headers=headers, timeout=15)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                candles = data.get('data', {}).get('candles', [])
+                if candles:
+                    print(f"  ✅ {interval}: {len(candles)} candles")
+                    return candles
+        except Exception as e:
+            continue
+    
+    print(f"  ❌ {symbol}: No historical data available")
+    print(f"  💡 Upstox may require subscription for historical data")
+    return []
 
 def create_candlestick_chart(candles, symbol, spot_price):
-    """Create candlestick chart from data"""
+    """Create candlestick chart"""
     if not candles or len(candles) < 10:
         return None
     
-    # Parse candle data: [timestamp, open, high, low, close, volume, oi]
+    # Parse candles: [timestamp, open, high, low, close, volume, oi]
     dates = []
     opens = []
     highs = []
@@ -205,7 +257,7 @@ def create_candlestick_chart(candles, symbol, spot_price):
     closes = []
     volumes = []
     
-    for candle in reversed(candles):  # Reverse for chronological order
+    for candle in reversed(candles):
         try:
             timestamp = datetime.fromisoformat(candle[0].replace('Z', '+00:00'))
             timestamp = timestamp.astimezone(IST)
@@ -215,14 +267,14 @@ def create_candlestick_chart(candles, symbol, spot_price):
             highs.append(float(candle[2]))
             lows.append(float(candle[3]))
             closes.append(float(candle[4]))
-            volumes.append(int(candle[5]))
+            volumes.append(int(candle[5]) if candle[5] else 0)
         except Exception as e:
             continue
     
     if len(dates) < 10:
         return None
     
-    # Create figure with subplots
+    # Create figure
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), 
                                      gridspec_kw={'height_ratios': [3, 1]})
     
@@ -234,11 +286,9 @@ def create_candlestick_chart(candles, symbol, spot_price):
     for i in range(len(dates)):
         color = '#00ff00' if closes[i] >= opens[i] else '#ff0000'
         
-        # Draw high-low line
         ax1.plot([dates[i], dates[i]], [lows[i], highs[i]], 
                 color=color, linewidth=0.8, alpha=0.8)
         
-        # Draw candle body
         height = abs(closes[i] - opens[i])
         bottom = min(opens[i], closes[i])
         
@@ -248,23 +298,20 @@ def create_candlestick_chart(candles, symbol, spot_price):
                            edgecolor=color, alpha=0.9)
             ax1.add_patch(rect)
         else:
-            # Doji - draw horizontal line
             ax1.plot([dates[i], dates[i]], [opens[i], opens[i]], 
                     color=color, linewidth=1.5)
     
-    # Add spot price line
+    # Spot price line
     ax1.axhline(y=spot_price, color='#ffff00', linestyle='--', 
                linewidth=1.5, label=f'Spot: ₹{spot_price:.2f}', alpha=0.7)
     
-    # Format price axis
     ax1.set_ylabel('Price (₹)', color='white', fontsize=11, fontweight='bold')
     ax1.tick_params(colors='white', labelsize=9)
     ax1.grid(True, alpha=0.2, color='#333333', linestyle=':')
     ax1.legend(loc='upper left', fontsize=10, facecolor='#1a1a1a', 
               edgecolor='#333333', labelcolor='white')
     
-    # Title
-    title = f'{symbol} - 5 Minute Candlestick Chart (Last 7 Days)'
+    title = f'{symbol} - 5 Minute Candlestick (Upstox Data)'
     ax1.set_title(title, color='white', fontsize=14, fontweight='bold', pad=15)
     
     # Volume bars
@@ -276,7 +323,7 @@ def create_candlestick_chart(candles, symbol, spot_price):
     ax2.tick_params(colors='white', labelsize=9)
     ax2.grid(True, alpha=0.2, color='#333333', linestyle=':')
     
-    # Format x-axis for both subplots
+    # Format x-axis
     for ax in [ax1, ax2]:
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%b %H:%M', tz=IST))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
@@ -288,7 +335,6 @@ def create_candlestick_chart(candles, symbol, spot_price):
     
     plt.tight_layout()
     
-    # Save to bytes buffer
     buf = io.BytesIO()
     plt.savefig(buf, format='png', dpi=100, facecolor='#0a0a0a', 
                edgecolor='none', bbox_inches='tight')
@@ -302,13 +348,11 @@ def format_detailed_message(symbol, spot, expiry, strikes):
     if not strikes or len(strikes) < 11:
         return None
     
-    # Find ATM
     atm_index = len(strikes) // 2
     if spot > 0:
         atm_index = min(range(len(strikes)), 
                        key=lambda i: abs(strikes[i].get('strike_price', 0) - spot))
     
-    # Select 11 strikes
     start = max(0, atm_index - 5)
     end = min(len(strikes), atm_index + 6)
     
@@ -382,106 +426,83 @@ def format_detailed_message(symbol, spot, expiry, strikes):
     return msg
 
 async def send_telegram_text(msg):
-    """Send text message"""
+    """Send text"""
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        await bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID, 
-            text=msg, 
-            parse_mode='Markdown'
-        )
+        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode='Markdown')
         return True
     except Exception as e:
         print(f"❌ Text error: {e}")
         return False
 
 async def send_telegram_photo(photo_buf, caption):
-    """Send photo with caption"""
+    """Send photo"""
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        await bot.send_photo(
-            chat_id=TELEGRAM_CHAT_ID,
-            photo=photo_buf,
-            caption=caption,
-            parse_mode='Markdown'
-        )
+        await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_buf, 
+                           caption=caption, parse_mode='Markdown')
         return True
     except Exception as e:
         print(f"❌ Photo error: {e}")
         return False
 
 async def process_stock(instrument_key, symbol, idx, total):
-    """Process single stock - fetch data and send"""
-    print(f"\n[{idx}/{total}] Processing {symbol}...")
+    """Process stock"""
+    print(f"\n[{idx}/{total}] {symbol}")
     
     try:
-        # Get expiry
         expiry = get_next_expiry(instrument_key)
-        
-        # Get spot price
         spot = get_spot_price(instrument_key)
         
         if spot == 0:
-            print(f"  ⚠️ {symbol}: Invalid spot")
+            print(f"  ⚠️ Invalid spot")
             return False
         
-        # Get option chain
         strikes = get_option_chain(instrument_key, expiry)
         
         if not strikes or len(strikes) < 11:
-            print(f"  ⚠️ {symbol}: Insufficient strikes")
+            print(f"  ⚠️ Insufficient strikes")
             return False
         
-        print(f"  ✅ {symbol}: ₹{spot:.2f} | {len(strikes)} strikes")
+        print(f"  ✅ ₹{spot:.2f} | {len(strikes)} strikes")
         
-        # Format option chain message
         msg = format_detailed_message(symbol, spot, expiry, strikes)
         
         if not msg:
-            print(f"  ⚠️ {symbol}: Message format failed")
             return False
         
-        # Send option chain first
-        success = await send_telegram_text(msg)
-        if success:
-            print(f"  📤 {symbol}: Option chain sent")
+        await send_telegram_text(msg)
+        print(f"  📤 Option chain sent")
         
-        # Try to get chart data from Yahoo Finance
-        print(f"  📊 {symbol}: Fetching chart data...")
-        candles = get_historical_data_yfinance(symbol)
+        # Try to get historical data
+        print(f"  📊 Fetching candles...")
+        candles = get_historical_candles(instrument_key, symbol)
         
         if candles and len(candles) >= 10:
-            # Create chart
-            print(f"  📈 {symbol}: Creating chart...")
+            print(f"  📈 Creating chart...")
             chart_buf = create_candlestick_chart(candles, symbol, spot)
             
             if chart_buf:
-                # Send chart
-                caption = f"📈 *{symbol}* - 5min Chart (7 days)\n💰 Spot: ₹{spot:.2f}"
-                success = await send_telegram_photo(chart_buf, caption)
-                if success:
-                    print(f"  📤 {symbol}: Chart sent!")
-                    return True
+                caption = f"📈 *{symbol}* - 5min Upstox Chart\n💰 Spot: ₹{spot:.2f}"
+                await send_telegram_photo(chart_buf, caption)
+                print(f"  📤 Chart sent!")
+                return True
         else:
-            # If no chart data, add TradingView link
-            chart_link = f"https://in.tradingview.com/chart/?symbol=NSE%3A{symbol}"
-            link_msg = f"📈 [View {symbol} Chart]({chart_link})"
-            await send_telegram_text(link_msg)
-            print(f"  📤 {symbol}: Chart link sent")
+            print(f"  ⚠️ No chart data from Upstox")
         
         return True
         
     except Exception as e:
-        print(f"  ❌ {symbol}: {e}")
+        print(f"  ❌ Error: {e}")
         return False
 
 async def fetch_all():
-    """Fetch and send all stocks"""
+    """Fetch all"""
     print("\n" + "="*60)
     print(f"⏰ {datetime.now(IST).strftime('%I:%M:%S %p IST')}")
     print("="*60)
     
-    header = f"🚀 *NIFTY 50 UPDATE*\n"
+    header = f"🚀 *NIFTY 50 - UPSTOX DATA*\n"
     header += f"⏰ {datetime.now(IST).strftime('%I:%M %p IST')}\n"
     header += f"📊 Option Chain + 5min Charts\n"
     header += f"📈 {len(NIFTY50_STOCKS)} Stocks\n\n_Starting..._"
@@ -495,26 +516,26 @@ async def fetch_all():
         result = await process_stock(key, symbol, idx, total)
         if result:
             success += 1
-        await asyncio.sleep(3)  # Rate limit
+        await asyncio.sleep(3)
     
     summary = f"\n✅ *COMPLETE*\n📊 {success}/{total} stocks\n⏰ {datetime.now(IST).strftime('%I:%M %p')}"
     await send_telegram_text(summary)
     
     print("\n" + "="*60)
-    print(f"✅ Complete: {success}/{total}")
+    print(f"✅ {success}/{total}")
     print("="*60)
 
 async def monitoring_loop():
-    """Main loop - every 5 minutes"""
-    print("\n🔄 Starting loop...")
-    print("🔄 Press Ctrl+C to stop\n")
+    """Main loop"""
+    print("\n🔄 Starting loop (5 min)...")
+    print("🔄 Ctrl+C to stop\n")
     
     while True:
         try:
             await fetch_all()
             
             next_time = (datetime.now(IST) + timedelta(minutes=5)).strftime('%I:%M %p')
-            print(f"\n⏳ Next update: {next_time}\n")
+            print(f"\n⏳ Next: {next_time}\n")
             
             await asyncio.sleep(300)
             
@@ -527,11 +548,12 @@ async def monitoring_loop():
 
 async def main():
     print("\n" + "="*60)
-    print("🚀 NIFTY 50 OPTIONS + CHARTS MONITOR")
+    print("🚀 NIFTY 50 - PURE UPSTOX API")
     print("="*60)
-    print("📊 Option Chain: 11 strikes, full data")
-    print("📈 Charts: 5min candlestick, 7 days")
-    print("⏰ Updates: Every 5 minutes")
+    print("📊 Option Chain: Full data")
+    print("📈 Charts: 5min candlestick")
+    print("🔑 Source: 100% Upstox API")
+    print("⏰ Every 5 minutes")
     print("="*60)
     
     await monitoring_loop()
