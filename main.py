@@ -201,37 +201,54 @@ def get_available_expiries(instrument_key="NSE_INDEX|Nifty 50"):
         encoded_key = urllib.parse.quote(instrument_key, safe='')
         url = f"{BASE_URL}/v2/option/contract?instrument_key={encoded_key}"
         
-        logger.info(f"📡 Fetching contracts to extract expiries...")
+        logger.info(f"📡 Fetching contracts: {url[:120]}")
         data = http_get_with_retry(url, headers=headers, timeout=15, retries=2)
         
         if not data:
-            logger.warning("No data from contracts API")
+            logger.warning("❌ No data from contracts API")
             return []
+        
+        logger.info(f"✅ Got response, type: {type(data)}, keys: {data.keys() if isinstance(data, dict) else 'N/A'}")
         
         # Extract contracts
         contracts = []
         if isinstance(data, dict) and 'data' in data:
             contracts = data['data']
+            logger.info(f"✅ Found 'data' key with {len(contracts) if isinstance(contracts, list) else 'NON-LIST'} items")
         elif isinstance(data, list):
             contracts = data
+            logger.info(f"✅ Response is list with {len(contracts)} items")
         
         if not contracts:
-            logger.warning("No contracts found")
+            logger.warning("❌ No contracts found in response")
             return []
         
         # Extract unique expiries
         expiries = set()
+        sample_contract = None
+        for contract in contracts[:5]:  # Check first 5
+            if isinstance(contract, dict):
+                logger.info(f"Sample contract keys: {list(contract.keys())[:10]}")
+                if 'expiry' in contract:
+                    expiries.add(contract['expiry'])
+                    sample_contract = contract
+        
+        # Try all contracts
         for contract in contracts:
             if isinstance(contract, dict) and 'expiry' in contract:
                 expiries.add(contract['expiry'])
         
         expiries_list = sorted(list(expiries))
-        logger.info(f"✅ Found {len(expiries_list)} expiries: {expiries_list[:5]}")
+        
+        if expiries_list:
+            logger.info(f"✅ Found {len(expiries_list)} expiries: {expiries_list[:8]}")
+        else:
+            logger.warning(f"❌ No expiries found! Sample contract: {sample_contract}")
         
         return expiries_list
         
     except Exception as e:
-        logger.error(f"Error fetching expiries: {e}")
+        logger.error(f"❌ get_available_expiries error: {e}", exc_info=True)
         return []
 
 def get_next_valid_expiry(instrument_key="NSE_INDEX|Nifty 50"):
@@ -635,22 +652,39 @@ async def run_bot_cycle():
                 logger.info("⏳ 5 sec...")
                 await asyncio.sleep(5)
         
-        logger.info("\n📊 Fetching option chain...")
+        # OPTION CHAIN WITH DETAILED LOGGING
+        logger.info("\n" + "="*60)
+        logger.info("📊 STARTING OPTION CHAIN FETCH")
+        logger.info("="*60)
         
+        oc_data = None
         try:
+            logger.info("Step 1: Calling get_option_chain_data()...")
             oc_data = get_option_chain_data("NSE_INDEX|Nifty 50")
             
-            if oc_data and oc_data.get('strikes') and len(oc_data['strikes']) > 0:
-                logger.info(f"✅ {len(oc_data['strikes'])} strikes")
-                msg = format_option_chain_message(oc_data, "NIFTY 50")
-                await send_message(msg)
-                await asyncio.sleep(1)
+            logger.info(f"Step 2: Received oc_data: {type(oc_data)}")
+            
+            if oc_data:
+                logger.info(f"Step 3: oc_data keys: {oc_data.keys() if isinstance(oc_data, dict) else 'NOT A DICT'}")
+                
+                if oc_data.get('strikes'):
+                    logger.info(f"Step 4: Found {len(oc_data['strikes'])} strikes")
+                    msg = format_option_chain_message(oc_data, "NIFTY 50")
+                    logger.info(f"Step 5: Message formatted, length: {len(msg)}")
+                    await send_message(msg)
+                    logger.info("Step 6: ✅ Option chain message sent!")
+                    await asyncio.sleep(1)
+                else:
+                    logger.warning("⚠️ oc_data has NO 'strikes' key")
+                    await send_message("⚠️ Option chain: No strikes data")
             else:
-                logger.warning("⚠️ No strikes")
-                await send_message("⚠️ Option chain unavailable")
+                logger.warning("⚠️ oc_data is None/False")
+                await send_message("⚠️ Option chain: API returned empty")
+                
         except Exception as e:
-            logger.error(f"❌ Option error: {e}")
-            await send_message(f"❌ Option error: {str(e)[:150]}")
+            logger.error(f"❌ OPTION CHAIN EXCEPTION: {type(e).__name__}: {str(e)}", exc_info=True)
+            error_msg = f"❌ Option chain error:\n{type(e).__name__}: {str(e)[:200]}"
+            await send_message(error_msg)
         
         await asyncio.sleep(2)
         
