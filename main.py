@@ -268,11 +268,11 @@ def aggregate_to_15min(candles_5min):
 # ==================== CHART CREATION ====================
 
 def create_candlestick_chart(candles, symbol, spot_price):
-    """Create TradingView-style professional candlestick chart"""
+    """Create TradingView-style professional candlestick chart (Market hours only)"""
     if not candles or len(candles) < 10:
         return None
     
-    # Parse candles
+    # Parse candles and filter for market hours (9:15 AM - 3:30 PM IST)
     dates = []
     opens = []
     highs = []
@@ -284,6 +284,16 @@ def create_candlestick_chart(candles, symbol, spot_price):
         try:
             timestamp = datetime.fromisoformat(candle[0].replace('Z', '+00:00'))
             timestamp = timestamp.astimezone(IST)
+            
+            # Filter: Only market hours (9:15 AM to 3:30 PM IST)
+            hour = timestamp.hour
+            minute = timestamp.minute
+            
+            # Skip if before 9:15 AM or after 3:30 PM
+            if hour < 9 or (hour == 9 and minute < 15):
+                continue
+            if hour > 15 or (hour == 15 and minute > 30):
+                continue
             
             dates.append(timestamp)
             opens.append(float(candle[1]))
@@ -368,7 +378,7 @@ def create_candlestick_chart(candles, symbol, spot_price):
     ax1.set_axisbelow(True)
     
     # Title - Clean and bold
-    title = f'{symbol}  •  15 Min  •  Last 7 Days'
+    title = f'{symbol}  •  15 Min  •  Market Hours (9:15 AM - 3:30 PM)'
     ax1.set_title(title, color='#131722', fontsize=16, fontweight='600', 
                  pad=20, loc='left')
     
@@ -543,11 +553,11 @@ async def process_stock(instrument_key, symbol, idx, total):
             print(f"  ⚠️ Invalid spot price")
             return False
         
-        # Validate price ranges (Updated Oct 2024)
+        # Validate price ranges (Updated Oct 2024 - Relaxed ranges)
         price_ranges = {
             "TATASTEEL": (150, 250),
-            "MARUTI": (10000, 14000),
-            "KOTAKBANK": (1500, 2000),
+            "MARUTI": (3000, 14000),
+            "KOTAKBANK": (1500, 2500),
             "LT": (3000, 4500),
             "BAJAJFINSV": (1400, 2000),
             "BHARTIARTL": (1800, 2200),
@@ -591,7 +601,7 @@ async def process_stock(instrument_key, symbol, idx, total):
             chart_buf = create_candlestick_chart(candles, symbol, spot)
             
             if chart_buf:
-                caption = f"📈 *{symbol}* - 15min Chart (7 Days)\n💰 Spot: ₹{spot:.2f}\n🔑 {instrument_key.split('|')[1][:12]}"
+                caption = f"📈 *{symbol}* - 15min Chart (Market Hours)\n💰 Spot: ₹{spot:.2f}\n⏰ 9:15 AM - 3:30 PM IST"
                 await send_telegram_photo(chart_buf, caption)
                 print(f"  📤 Chart sent!")
                 return True
