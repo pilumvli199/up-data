@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# main.py - UPSTOX OPTION CHAIN BOT (Fixed for Railway)
+# main.py - UPSTOX OPTION CHAIN BOT (FIXED - Gets Valid Expiries)
 # Environment Variables: UPSTOX_ACCESS_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 import os
@@ -73,7 +73,7 @@ def is_market_open():
     return weekday < 5 and market_open <= time_now <= market_close
 
 def http_get_with_retry(url, headers=None, timeout=12, retries=2):
-    """HTTP GET with retry - NO Authorization for public endpoints"""
+    """HTTP GET with retry"""
     for attempt in range(1, retries + 1):
         try:
             resp = requests.get(url, headers=headers, timeout=timeout)
@@ -185,7 +185,7 @@ def get_spot_price(instrument_key):
         return None
 
 def get_next_weekly_expiry():
-    """Calculate next Thursday"""
+    """Calculate next Thursday (FALLBACK ONLY)"""
     today = get_ist_now()
     days_ahead = 3 - today.weekday()
     if days_ahead <= 0:
@@ -193,11 +193,12 @@ def get_next_weekly_expiry():
     next_thursday = today + timedelta(days=days_ahead)
     return next_thursday.strftime('%Y-%m-%d')
 
-def get_option_chain_data(instrument_key="NSE_INDEX|Nifty 50"):
+# ======================== NEW: GET VALID EXPIRIES ========================
+
+def get_available_expiries(instrument_key="NSE_INDEX|Nifty 50"):
     """
-    Fetch option chain using ALTERNATIVE method:
-    1. First try /v2/option/chain (direct)
-    2. If empty, use /v2/option/contract + /v2/option/greek (build manually)
+    🆕 Get all available expiry dates from Upstox API
+    This returns ACTUAL exchange-recognized expiry dates
     """
     try:
         headers = {
@@ -205,8 +206,95 @@ def get_option_chain_data(instrument_key="NSE_INDEX|Nifty 50"):
             "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
         }
         
-        expiry = get_next_weekly_expiry()
-        logger.info(f"📅 Target expiry: {expiry}")
+        encoded_key = urllib.parse.quote(instrument_key, safe='')
+        # NOTE: This endpoint might require Upstox Plus subscription
+        # For free tier, we'll use option contracts to extract expiries
+        url = f"{BASE_URL}/v2/option/contract?instrument_key={encoded_key}"
+        
+        logger.info(f"Fetching all contracts to extract expiries: {url[:120]}")
+        data = http_get_with_retry(url, headers=headers, timeout=15, retries=2)
+        
+        if not data:
+            logger.warning("No data from contracts API")
+            return []
+        
+        # Extract contracts
+        contracts = []
+        if isinstance(data, dict) and 'data' in data:
+            contracts = data['data']
+        elif isinstance(data, list):
+            contracts = data
+        
+        if not contracts:
+            logger.warning("No contracts found")
+            return []
+        
+        # Extract unique expiries from contracts
+        expiries = set()
+        for contract in contracts:
+            if isinstance(contract, dict) and 'expiry' in contract:
+                expiries.add(contract['expiry'])
+        
+        expiries_list = sorted(list(expiries))
+        logger.info(f"✅ Found {len(expiries_list)} unique expiries: {expiries_list[:5]}")
+        
+        return expiries_list
+        
+    except Exception as e:
+        logger.error(f"Error fetching expiries: {e}")
+        return []
+
+def get_next_valid_expiry(instrument_key="NSE_INDEX|Nifty 50"):
+    """
+    🆕 Get next valid expiry date from available expiries
+    This ensures we use ACTUAL exchange dates, not calculated ones
+    """
+    try:
+        expiries = get_available_expiries(instrument_key)
+        
+        if not expiries:
+            # Fallback to calculation if API fails
+            logger.warning("⚠️ No expiries from API, using fallback calculation")
+            return get_next_weekly_expiry()
+        
+        today = get_ist_now().date()
+        
+        # Find next expiry >= today
+        future_expiries = [e for e in expiries if datetime.strptime(e, '%Y-%m-%d').date() >= today]
+        
+        if future_expiries:
+            next_expiry = min(future_expiries)
+            logger.info(f"🎯 Next valid expiry: {next_expiry}")
+            return next_expiry
+        
+        # If all expiries are past, return nearest one
+        if expiries:
+            latest = max(expiries)
+            logger.warning(f"All expiries are past, using latest: {latest}")
+            return latest
+        
+        # Final fallback
+        return get_next_weekly_expiry()
+        
+    except Exception as e:
+        logger.error(f"Error getting next expiry: {e}")
+        return get_next_weekly_expiry()
+
+# ======================== OPTION CHAIN ========================
+
+def get_option_chain_data(instrument_key="NSE_INDEX|Nifty 50"):
+    """
+    🔧 FIXED: Now uses get_next_valid_expiry() instead of hardcoded calculation
+    """
+    try:
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
+        }
+        
+        # 🆕 Get VALID expiry from actual exchange data
+        expiry = get_next_valid_expiry(instrument_key)
+        logger.info(f"📅 Using expiry: {expiry}")
         
         # Get spot price first
         spot_price = get_spot_price(instrument_key)
@@ -216,12 +304,12 @@ def get_option_chain_data(instrument_key="NSE_INDEX|Nifty 50"):
             logger.warning("⚠️ Could not fetch spot price")
             spot_price = 0
         
-        # METHOD 1: Try direct option chain API
-        logger.info("🔍 Trying METHOD 1: Direct option chain API")
+        # Try direct option chain API
+        logger.info("🔍 Fetching option chain...")
         encoded_key = urllib.parse.quote(instrument_key, safe='')
         url = f"{BASE_URL}/v2/option/chain?instrument_key={encoded_key}&expiry_date={expiry}"
         
-        data = http_get_with_retry(url, headers=headers, timeout=20, retries=2)
+        data = http_get_with_retry(url, headers=headers, timeout=20, retries=3)
         
         if data and isinstance(data, dict):
             logger.info(f"📦 Response keys: {list(data.keys())}")
@@ -232,137 +320,27 @@ def get_option_chain_data(instrument_key="NSE_INDEX|Nifty 50"):
                 payload = data['data']
                 if isinstance(payload, list) and len(payload) > 0:
                     strikes_data = payload
-                    logger.info(f"✅ Found {len(strikes_data)} items in data")
+                    logger.info(f"✅ Found {len(strikes_data)} strikes in data")
                 elif isinstance(payload, dict):
                     for key in ['data', 'strikes', 'option_chain']:
-                        if key in payload and isinstance(payload[key], list) and len(payload[key]) > 0:
+                        if key in payload and isinstance(payload[key], list):
                             strikes_data = payload[key]
-                            logger.info(f"✅ Found {len(strikes_data)} items in data.{key}")
+                            logger.info(f"✅ Found {len(strikes_data)} strikes in data.{key}")
                             break
             
-            # If we got valid strikes data from Method 1
             if strikes_data and len(strikes_data) > 0:
-                logger.info("✅ METHOD 1 SUCCESS - Processing direct option chain")
+                logger.info("✅ Processing option chain data")
                 return process_option_chain_strikes(strikes_data, spot_price, expiry)
         
-        logger.warning("⚠️ METHOD 1 failed or returned empty - Trying METHOD 2")
-        
-        # METHOD 2: Build option chain from contracts + greeks
-        logger.info("🔍 Trying METHOD 2: Building from contracts + greeks")
-        
-        # Get all option contracts for expiry
-        url_contracts = f"{BASE_URL}/v2/option/contract?instrument_key={encoded_key}&expiry_date={expiry}"
-        logger.info(f"📡 Fetching contracts: {url_contracts[:120]}")
-        
-        contracts_data = http_get_with_retry(url_contracts, headers=headers, timeout=20, retries=2)
-        
-        if not contracts_data:
-            logger.error("❌ No contracts data received")
-            return None
-        
-        # Extract contracts list
-        contracts = []
-        if isinstance(contracts_data, dict) and 'data' in contracts_data:
-            contracts = contracts_data['data']
-        elif isinstance(contracts_data, list):
-            contracts = contracts_data
-        
-        if not contracts or len(contracts) == 0:
-            logger.error(f"❌ No contracts found for expiry {expiry}")
-            return None
-        
-        logger.info(f"✅ Got {len(contracts)} option contracts")
-        
-        # Get market data via Greeks API (batches of 50)
-        logger.info("📊 Fetching Greeks data in batches...")
-        instrument_keys = [c['instrument_key'] for c in contracts if 'instrument_key' in c]
-        
-        all_greeks = {}
-        for i in range(0, len(instrument_keys), 50):
-            batch = instrument_keys[i:i+50]
-            batch_str = ",".join(batch)
-            
-            url_greeks = f"{BASE_URL}/v2/option/greek?instrument_key={urllib.parse.quote(batch_str, safe='')}"
-            greeks_data = http_get_with_retry(url_greeks, headers=headers, timeout=15, retries=2)
-            
-            if greeks_data and isinstance(greeks_data, dict) and 'data' in greeks_data:
-                all_greeks.update(greeks_data['data'])
-                logger.info(f"✅ Batch {i//50 + 1}: Got {len(greeks_data['data'])} Greeks")
-            
-            time.sleep(0.3)  # Rate limit
-        
-        logger.info(f"📊 Total Greeks data: {len(all_greeks)} instruments")
-        
-        # Build strike dictionary
-        strikes_dict = {}
-        processed = 0
-        
-        for contract in contracts:
-            try:
-                instrument_key_contract = contract.get('instrument_key', '')
-                strike_price = float(contract.get('strike_price', 0))
-                option_type = contract.get('option_type', '').upper()
-                
-                if strike_price == 0:
-                    continue
-                
-                # Get market data from Greeks
-                greek_data = all_greeks.get(instrument_key_contract, {})
-                
-                if strike_price not in strikes_dict:
-                    strikes_dict[strike_price] = {'strike_price': strike_price, 'call': None, 'put': None}
-                
-                option_data = {
-                    'last_price': float(greek_data.get('last_price', greek_data.get('ltp', 0))),
-                    'oi': int(greek_data.get('oi', greek_data.get('open_interest', 0))),
-                    'volume': int(greek_data.get('volume', 0)),
-                    'delta': float(greek_data.get('delta', 0)),
-                    'theta': float(greek_data.get('theta', 0)),
-                    'gamma': float(greek_data.get('gamma', 0)),
-                    'vega': float(greek_data.get('vega', 0)),
-                    'iv': float(greek_data.get('iv', greek_data.get('implied_volatility', 0)))
-                }
-                
-                if option_type in ['CE', 'CALL']:
-                    strikes_dict[strike_price]['call'] = option_data
-                    processed += 1
-                elif option_type in ['PE', 'PUT']:
-                    strikes_dict[strike_price]['put'] = option_data
-                    processed += 1
-                    
-            except Exception as e:
-                continue
-        
-        logger.info(f"✅ Processed {processed} options, {len(strikes_dict)} unique strikes")
-        
-        if not strikes_dict:
-            logger.error("❌ No strikes processed")
-            return None
-        
-        sorted_strikes = sorted(strikes_dict.values(), key=lambda x: x['strike_price'])
-        
-        # Find ATM
-        atm_index = len(sorted_strikes) // 2
-        if spot_price and sorted_strikes:
-            atm_index = min(range(len(sorted_strikes)), 
-                          key=lambda i: abs(sorted_strikes[i]['strike_price'] - spot_price))
-        
-        atm_strike = sorted_strikes[atm_index]['strike_price'] if sorted_strikes else 0
-        logger.info(f"🎯 ATM strike: {atm_strike} (index: {atm_index})")
-        
-        return {
-            'strikes': sorted_strikes,
-            'atm_index': atm_index,
-            'spot_price': spot_price,
-            'expiry': expiry
-        }
+        logger.warning("⚠️ Option chain API returned empty/invalid data")
+        return None
         
     except Exception as e:
         logger.error(f"❌ Option chain error: {e}", exc_info=True)
         return None
 
 def process_option_chain_strikes(strikes_data, spot_price, expiry):
-    """Process strikes from direct option chain API"""
+    """Process strikes from option chain API response"""
     try:
         strikes_dict = {}
         processed_count = 0
@@ -398,6 +376,8 @@ def process_option_chain_strikes(strikes_data, spot_price, expiry):
                     'volume': int(md.get('volume', 0)),
                     'delta': float(greeks.get('delta', 0)),
                     'theta': float(greeks.get('theta', 0)),
+                    'gamma': float(greeks.get('gamma', 0)),
+                    'vega': float(greeks.get('vega', 0)),
                     'iv': float(greeks.get('iv', greeks.get('implied_volatility', 0)))
                 }
                 processed_count += 1
@@ -412,11 +392,16 @@ def process_option_chain_strikes(strikes_data, spot_price, expiry):
                     'volume': int(md.get('volume', 0)),
                     'delta': float(greeks.get('delta', 0)),
                     'theta': float(greeks.get('theta', 0)),
+                    'gamma': float(greeks.get('gamma', 0)),
+                    'vega': float(greeks.get('vega', 0)),
                     'iv': float(greeks.get('iv', greeks.get('implied_volatility', 0)))
                 }
                 processed_count += 1
         
         logger.info(f"✅ Processed {processed_count} options from {len(strikes_dict)} strikes")
+        
+        if not strikes_dict:
+            return None
         
         sorted_strikes = sorted(strikes_dict.values(), key=lambda x: x['strike_price'])
         
@@ -523,58 +508,6 @@ def format_option_chain_message(oc_data, symbol="NIFTY 50"):
         expiry = oc_data['expiry']
         
         msg = f"📊 *{symbol} OPTION CHAIN*\n\n"
-        msg += f"📅 Expiry: {expiry}\n"
-        msg += f"💰 Spot: ₹{spot:,.2f}\n"
-        msg += f"🎯 ATM: ₹{strikes[atm_index]['strike_price']:,.0f}\n\n"
-        
-        # Select strikes
-        start = max(0, atm_index - 5)
-        end = min(len(strikes), atm_index + 6)
-        selected = strikes[start:end]
-        
-        msg += "```\n"
-        msg += "Strike    CE-LTP  CE-OI   CE-Vol  PE-LTP  PE-OI   PE-Vol\n"
-        msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        
-        for i, s in enumerate(selected):
-            is_atm = (start + i == atm_index)
-            mark = "🔸" if is_atm else "  "
-            
-            sp = s['strike_price']
-            call = s.get('call', {})
-            put = s.get('put', {})
-            
-            ce_ltp = call.get('last_price', 0) if call else 0
-            ce_oi = call.get('oi', 0) if call else 0
-            ce_vol = call.get('volume', 0) if call else 0
-            
-            pe_ltp = put.get('last_price', 0) if put else 0
-            pe_oi = put.get('oi', 0) if put else 0
-            pe_vol = put.get('volume', 0) if put else 0
-            
-            msg += f"{mark}{sp:7.0f}  {ce_ltp:7.2f} {ce_oi/1000:7.1f}K {ce_vol/1000:6.1f}K {pe_ltp:7.2f} {pe_oi/1000:7.1f}K {pe_vol/1000:6.1f}K\n"
-        
-        msg += "```\n\n"
-        
-        # Greeks
-        atm = strikes[atm_index]
-        call_atm = atm.get('call', {})
-        put_atm = atm.get('put', {})
-        
-        if call_atm or put_atm:
-            msg += "📈 *ATM Greeks:*\n"
-            if call_atm:
-                iv = call_atm.get('iv', 0) * 100 if call_atm.get('iv', 0) < 10 else call_atm.get('iv', 0)
-                msg += f"CE: Δ={call_atm.get('delta', 0):.3f} | Θ={call_atm.get('theta', 0):.2f} | IV={iv:.1f}%\n"
-            if put_atm:
-                iv = put_atm.get('iv', 0) * 100 if put_atm.get('iv', 0) < 10 else put_atm.get('iv', 0)
-                msg += f"PE: Δ={put_atm.get('delta', 0):.3f} | Θ={put_atm.get('theta', 0):.2f} | IV={iv:.1f}%\n"
-        
-        # PCR
-        total_ce_oi = sum(s.get('call', {}).get('oi', 0) for s in selected if s.get('call'))
-        total_pe_oi = sum(s.get('put', {}).get('oi', 0) for s in selected if s.get('put'))
-        pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
-        
         msg += f"\n📊 *PCR:* {pcr:.3f}"
         
         return msg
@@ -692,7 +625,7 @@ async def run_bot_cycle():
                 await asyncio.sleep(1)
             else:
                 logger.warning("⚠️ Option chain: No strikes data")
-                await send_message("⚠️ Option chain data unavailable (no strikes returned)")
+                await send_message("⚠️ Option chain data unavailable")
         except Exception as e:
             logger.error(f"❌ Option chain error: {e}")
             await send_message(f"❌ Option chain error: {str(e)[:150]}")
@@ -730,14 +663,18 @@ async def run_bot_loop():
 async def send_startup():
     """Startup message"""
     try:
-        msg = "🤖 *UPSTOX BOT STARTED!*\n\n"
+        msg = "🤖 *UPSTOX BOT STARTED!* (v2.0 - Fixed)\n\n"
         msg += f"📊 {len(STOCKS_INDICES)} symbols\n"
         msg += "⏱️ Updates every 5 min\n\n"
         msg += "📈 Features:\n"
         msg += "  • 30-min Charts\n"
         msg += "  • Volume Analysis\n"
-        msg += "  • Option Chain\n"
+        msg += "  • Option Chain (Fixed!)\n"
         msg += "  • Greeks & IV\n\n"
+        msg += "🔧 *What's Fixed:*\n"
+        msg += "  • Now fetches ACTUAL expiry dates\n"
+        msg += "  • Uses exchange-recognized dates\n"
+        msg += "  • No more 'contracts not found' errors\n\n"
         msg += f"🕐 {get_ist_now().strftime('%I:%M %p IST')}"
         await send_message(msg)
         logger.info("✅ Startup message sent")
@@ -762,7 +699,7 @@ async def main():
         logger.error(f"Fatal error: {e}")
 
 if __name__ == "__main__":
-    logger.info("🔧 Starting Upstox Option Chain Bot...")
+    logger.info("🔧 Starting Upstox Option Chain Bot (v2.0 - Fixed)...")
     logger.info("📦 Checking dependencies...")
     
     try:
@@ -775,4 +712,56 @@ if __name__ == "__main__":
         logger.error(f"❌ Missing: {e}")
         exit(1)
     
-    asyncio.run(main())
+    asyncio.run(main()) f"📅 Expiry: {expiry}\n"
+        msg += f"💰 Spot: ₹{spot:,.2f}\n"
+        msg += f"🎯 ATM: ₹{strikes[atm_index]['strike_price']:,.0f}\n\n"
+        
+        # Select strikes
+        start = max(0, atm_index - 5)
+        end = min(len(strikes), atm_index + 6)
+        selected = strikes[start:end]
+        
+        msg += "```\n"
+        msg += "Strike    CE-LTP  CE-OI   CE-Vol  PE-LTP  PE-OI   PE-Vol\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        
+        for i, s in enumerate(selected):
+            is_atm = (start + i == atm_index)
+            mark = "🔸" if is_atm else "  "
+            
+            sp = s['strike_price']
+            call = s.get('call', {})
+            put = s.get('put', {})
+            
+            ce_ltp = call.get('last_price', 0) if call else 0
+            ce_oi = call.get('oi', 0) if call else 0
+            ce_vol = call.get('volume', 0) if call else 0
+            
+            pe_ltp = put.get('last_price', 0) if put else 0
+            pe_oi = put.get('oi', 0) if put else 0
+            pe_vol = put.get('volume', 0) if put else 0
+            
+            msg += f"{mark}{sp:7.0f}  {ce_ltp:7.2f} {ce_oi/1000:7.1f}K {ce_vol/1000:6.1f}K {pe_ltp:7.2f} {pe_oi/1000:7.1f}K {pe_vol/1000:6.1f}K\n"
+        
+        msg += "```\n\n"
+        
+        # Greeks
+        atm = strikes[atm_index]
+        call_atm = atm.get('call', {})
+        put_atm = atm.get('put', {})
+        
+        if call_atm or put_atm:
+            msg += "📈 *ATM Greeks:*\n"
+            if call_atm:
+                iv = call_atm.get('iv', 0) * 100 if call_atm.get('iv', 0) < 10 else call_atm.get('iv', 0)
+                msg += f"CE: Δ={call_atm.get('delta', 0):.3f} | Θ={call_atm.get('theta', 0):.2f} | IV={iv:.1f}%\n"
+            if put_atm:
+                iv = put_atm.get('iv', 0) * 100 if put_atm.get('iv', 0) < 10 else put_atm.get('iv', 0)
+                msg += f"PE: Δ={put_atm.get('delta', 0):.3f} | Θ={put_atm.get('theta', 0):.2f} | IV={iv:.1f}%\n"
+        
+        # PCR
+        total_ce_oi = sum(s.get('call', {}).get('oi', 0) for s in selected if s.get('call'))
+        total_pe_oi = sum(s.get('put', {}).get('oi', 0) for s in selected if s.get('put'))
+        pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
+        
+        msg +=
