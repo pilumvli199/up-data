@@ -153,7 +153,7 @@ def get_spot_price(instrument_key):
     return 0
 
 def get_historical_candles(instrument_key, symbol):
-    """Get historical candle data from Upstox - ALL POSSIBLE FORMATS"""
+    """Get historical candle data using Upstox V3 API (5 minute interval)"""
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
@@ -161,44 +161,27 @@ def get_historical_candles(instrument_key, symbol):
     
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     
-    # Try multiple Upstox API endpoints
-    
-    # 1. Try intraday endpoint
+    # Method 1: V3 Intraday API - 5 minute data (Today only)
     try:
-        url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/5minute"
-        print(f"  🔍 Trying: intraday endpoint...")
+        url = f"{BASE_URL}/v3/historical-candle/intraday/{encoded_key}/minutes/5"
+        print(f"  🔍 V3 Intraday (5min)...")
         resp = requests.get(url, headers=headers, timeout=15)
         
         if resp.status_code == 200:
             data = resp.json()
-            candles = data.get('data', {}).get('candles', [])
-            if candles:
-                print(f"  ✅ Intraday: {len(candles)} candles")
-                return candles
-        else:
-            print(f"  ⚠️ Intraday: HTTP {resp.status_code}")
-    except Exception as e:
-        print(f"  ⚠️ Intraday error: {e}")
-    
-    # 2. Try date-based endpoint (today)
-    try:
-        to_date = datetime.now(IST).strftime('%Y-%m-%d')
-        url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/5minute/{to_date}"
-        print(f"  🔍 Trying: date endpoint (today)...")
-        resp = requests.get(url, headers=headers, timeout=15)
+            if data.get('status') == 'success':
+                candles = data.get('data', {}).get('candles', [])
+                if candles:
+                    print(f"  ✅ Got {len(candles)} candles (today)")
+                    return candles
         
-        if resp.status_code == 200:
-            data = resp.json()
-            candles = data.get('data', {}).get('candles', [])
-            if candles:
-                print(f"  ✅ Today: {len(candles)} candles")
-                return candles
-        else:
-            print(f"  ⚠️ Today: HTTP {resp.status_code}")
+        print(f"  ⚠️ V3 Intraday: HTTP {resp.status_code}")
+        if resp.status_code != 200:
+            print(f"  📄 Response: {resp.text[:300]}")
     except Exception as e:
-        print(f"  ⚠️ Today error: {e}")
+        print(f"  ⚠️ V3 Intraday error: {e}")
     
-    # 3. Try with date range (7 days)
+    # Method 2: V3 Historical API - 5 minute data (Last 7 days)
     try:
         to_date = datetime.now(IST)
         from_date = to_date - timedelta(days=7)
@@ -206,43 +189,76 @@ def get_historical_candles(instrument_key, symbol):
         to_str = to_date.strftime('%Y-%m-%d')
         from_str = from_date.strftime('%Y-%m-%d')
         
-        url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/5minute/{to_str}/{from_str}"
-        print(f"  🔍 Trying: date range (7 days)...")
+        url = f"{BASE_URL}/v3/historical-candle/{encoded_key}/minutes/5/{to_str}/{from_str}"
+        print(f"  🔍 V3 Historical (5min, 7 days)...")
         resp = requests.get(url, headers=headers, timeout=15)
         
         if resp.status_code == 200:
             data = resp.json()
-            candles = data.get('data', {}).get('candles', [])
-            if candles:
-                print(f"  ✅ Range: {len(candles)} candles")
-                return candles
-        else:
-            print(f"  ⚠️ Range: HTTP {resp.status_code}")
-            # Print response for debugging
-            if resp.status_code == 400:
-                print(f"  📄 Response: {resp.text[:200]}")
-    except Exception as e:
-        print(f"  ⚠️ Range error: {e}")
-    
-    # 4. Try different interval formats
-    for interval in ['5m', '5min', '5']:
-        try:
-            url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/{interval}/{to_date}"
-            print(f"  🔍 Trying: interval={interval}...")
-            resp = requests.get(url, headers=headers, timeout=15)
-            
-            if resp.status_code == 200:
-                data = resp.json()
+            if data.get('status') == 'success':
                 candles = data.get('data', {}).get('candles', [])
                 if candles:
-                    print(f"  ✅ {interval}: {len(candles)} candles")
+                    print(f"  ✅ Got {len(candles)} candles (7 days)")
                     return candles
-        except Exception as e:
-            continue
+        
+        print(f"  ⚠️ V3 Historical: HTTP {resp.status_code}")
+        if resp.status_code != 200:
+            print(f"  📄 Response: {resp.text[:300]}")
+    except Exception as e:
+        print(f"  ⚠️ V3 Historical error: {e}")
     
-    print(f"  ❌ {symbol}: No historical data available")
-    print(f"  💡 Upstox may require subscription for historical data")
+    # Method 3: Fallback to V2 with 1 minute data (aggregate to 5 min)
+    try:
+        url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
+        print(f"  🔍 V2 Fallback (1min)...")
+        resp = requests.get(url, headers=headers, timeout=15)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('status') == 'success':
+                candles_1min = data.get('data', {}).get('candles', [])
+                if candles_1min:
+                    print(f"  ✅ Got {len(candles_1min)} 1min candles")
+                    # Aggregate 1min to 5min
+                    candles_5min = aggregate_to_5min(candles_1min)
+                    print(f"  📊 Aggregated to {len(candles_5min)} 5min candles")
+                    return candles_5min
+        
+        print(f"  ⚠️ V2 Fallback: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"  ⚠️ V2 Fallback error: {e}")
+    
+    print(f"  ❌ {symbol}: No candle data available")
+    print(f"  💡 Check: 1) Token valid? 2) Market hours? 3) API subscription?")
     return []
+
+def aggregate_to_5min(candles_1min):
+    """Aggregate 1-minute candles to 5-minute candles"""
+    if not candles_1min or len(candles_1min) < 5:
+        return []
+    
+    candles_5min = []
+    
+    # Process in groups of 5
+    for i in range(0, len(candles_1min), 5):
+        batch = candles_1min[i:i+5]
+        if len(batch) < 5:
+            continue
+        
+        # Format: [timestamp, open, high, low, close, volume, oi]
+        timestamp = batch[0][0]  # First candle timestamp
+        open_price = batch[0][1]  # First candle open
+        high_price = max(c[2] for c in batch)  # Highest high
+        low_price = min(c[3] for c in batch)  # Lowest low
+        close_price = batch[-1][4]  # Last candle close
+        volume = sum(c[5] for c in batch)  # Sum of volumes
+        oi = batch[-1][6]  # Last OI
+        
+        candles_5min.append([
+            timestamp, open_price, high_price, low_price, close_price, volume, oi
+        ])
+    
+    return candles_5min
 
 def create_candlestick_chart(candles, symbol, spot_price):
     """Create candlestick chart"""
