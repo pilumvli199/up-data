@@ -321,15 +321,11 @@ def create_candlestick_chart(candles, symbol, spot_price):
     ax1.set_facecolor('#ffffff')
     ax2.set_facecolor('#fafafa')
     
-    # Calculate candle width based on data density
-    if len(dates) > 1:
-        time_diff = (dates[-1] - dates[0]).total_seconds() / 3600 / len(dates)
-        candle_width = time_diff / 48  # Dynamic width
-    else:
-        candle_width = 0.004
+    # Use index-based plotting to avoid gaps
+    indices = range(len(dates))
     
     # Plot candlesticks with better styling
-    for i in range(len(dates)):
+    for i in indices:
         is_bullish = closes[i] >= opens[i]
         
         # Professional colors
@@ -337,7 +333,7 @@ def create_candlestick_chart(candles, symbol, spot_price):
         wick_color = body_color
         
         # Draw wick (thinner, cleaner)
-        ax1.plot([dates[i], dates[i]], [lows[i], highs[i]], 
+        ax1.plot([i, i], [lows[i], highs[i]], 
                 color=wick_color, linewidth=1.0, alpha=1.0, 
                 solid_capstyle='round', zorder=2)
         
@@ -346,8 +342,7 @@ def create_candlestick_chart(candles, symbol, spot_price):
         bottom = min(opens[i], closes[i])
         
         if height > 0.001:
-            rect = Rectangle((mdates.date2num(dates[i]) - candle_width/2, bottom),
-                           candle_width, height, 
+            rect = Rectangle((i - 0.4, bottom), 0.8, height, 
                            facecolor=body_color, 
                            edgecolor=body_color, 
                            alpha=1.0,
@@ -356,9 +351,7 @@ def create_candlestick_chart(candles, symbol, spot_price):
             ax1.add_patch(rect)
         else:
             # Doji - thin line
-            ax1.plot([mdates.date2num(dates[i]) - candle_width/2, 
-                     mdates.date2num(dates[i]) + candle_width/2], 
-                    [opens[i], opens[i]], 
+            ax1.plot([i - 0.4, i + 0.4], [opens[i], opens[i]], 
                     color=body_color, linewidth=1.5, solid_capstyle='butt', zorder=3)
     
     # Current price line (clean blue)
@@ -387,15 +380,15 @@ def create_candlestick_chart(candles, symbol, spot_price):
     ax1.set_title(title, color='#131722', fontsize=16, fontweight='600', 
                  pad=20, loc='left')
     
-    # Volume bars - Subtle transparency
+    # Volume bars - Subtle transparency (index-based)
     colors_vol = []
-    for i in range(len(dates)):
+    for i in indices:
         if closes[i] >= opens[i]:
             colors_vol.append('#08998166')  # 40% opacity
         else:
             colors_vol.append('#f2364566')
     
-    ax2.bar(dates, volumes, color=colors_vol, width=candle_width, 
+    ax2.bar(indices, volumes, color=colors_vol, width=0.8, 
            alpha=1.0, edgecolor='none', zorder=2)
     
     ax2.set_ylabel('Volume', color='#787B86', fontsize=11, fontweight='500')
@@ -404,11 +397,15 @@ def create_candlestick_chart(candles, symbol, spot_price):
     ax2.grid(True, alpha=0.12, color='#D1D4DC', linestyle='-', linewidth=0.5, zorder=1)
     ax2.set_axisbelow(True)
     
-    # Format x-axis - Better date formatting
-    date_format = mdates.DateFormatter('%d %b\n%H:%M', tz=IST)
+    # Format x-axis with date labels (every Nth candle)
+    step = max(1, len(dates) // 10)  # Show ~10 labels
+    tick_positions = list(range(0, len(dates), step))
+    tick_labels = [dates[i].strftime('%d %b\n%H:%M') for i in tick_positions]
+    
     for ax in [ax1, ax2]:
-        ax.xaxis.set_major_formatter(date_format)
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels(tick_labels)
+        ax.set_xlim(-1, len(dates))
         
         # Clean borders
         for spine in ['top', 'right', 'bottom', 'left']:
