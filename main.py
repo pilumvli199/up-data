@@ -152,41 +152,45 @@ def get_spot_price(instrument_key):
     
     return 0
 
-def get_historical_data(instrument_key, symbol):
-    """Get 5min historical data for last 7 days"""
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
-    }
-    
-    # Calculate dates
-    to_date = datetime.now(IST)
-    from_date = to_date - timedelta(days=7)
-    
-    # Format dates for API
-    to_date_str = to_date.strftime('%Y-%m-%d')
-    from_date_str = from_date.strftime('%Y-%m-%d')
-    
-    encoded_key = urllib.parse.quote(instrument_key, safe='')
-    url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/5minute/{to_date_str}/{from_date_str}"
-    
+def get_historical_data_yfinance(symbol):
+    """Get historical data from Yahoo Finance as fallback"""
     try:
-        resp = requests.get(url, headers=headers, timeout=20)
-        if resp.status_code == 200:
-            data = resp.json()
-            candles = data.get('data', {}).get('candles', [])
-            
-            if candles:
-                print(f"  📊 {symbol}: Got {len(candles)} candles")
-                return candles
-            else:
-                print(f"  ⚠️ {symbol}: No candle data")
-        else:
-            print(f"  ⚠️ {symbol}: HTTP {resp.status_code}")
+        import yfinance as yf
+        
+        # Yahoo Finance symbol format for NSE stocks
+        ticker = f"{symbol}.NS"
+        
+        # Get last 7 days of 5min data
+        stock = yf.Ticker(ticker)
+        
+        # Download 5min data for last 7 days
+        hist = stock.history(period="7d", interval="5m")
+        
+        if hist.empty:
+            return []
+        
+        # Convert to format similar to Upstox
+        candles = []
+        for idx, row in hist.iterrows():
+            # Format: [timestamp, open, high, low, close, volume, oi]
+            candle = [
+                idx.isoformat(),
+                row['Open'],
+                row['High'],
+                row['Low'],
+                row['Close'],
+                row['Volume'],
+                0  # OI not available in yfinance
+            ]
+            candles.append(candle)
+        
+        return candles
+    except ImportError:
+        print("  ⚠️ yfinance not installed. Run: pip install yfinance")
+        return []
     except Exception as e:
-        print(f"  ❌ {symbol}: Historical error - {e}")
-    
-    return []
+        print(f"  ⚠️ Yahoo Finance error: {e}")
+        return []
 
 def create_candlestick_chart(candles, symbol, spot_price):
     """Create candlestick chart from data"""
@@ -437,14 +441,14 @@ async def process_stock(instrument_key, symbol, idx, total):
             print(f"  ⚠️ {symbol}: Message format failed")
             return False
         
-        # Send option chain
+        # Send option chain first
         success = await send_telegram_text(msg)
         if success:
             print(f"  📤 {symbol}: Option chain sent")
         
-        # Get historical data
-        print(f"  📊 {symbol}: Fetching 5min candles...")
-        candles = get_historical_data(instrument_key, symbol)
+        # Try to get chart data from Yahoo Finance
+        print(f"  📊 {symbol}: Fetching chart data...")
+        candles = get_historical_data_yfinance(symbol)
         
         if candles and len(candles) >= 10:
             # Create chart
@@ -459,9 +463,13 @@ async def process_stock(instrument_key, symbol, idx, total):
                     print(f"  📤 {symbol}: Chart sent!")
                     return True
         else:
-            print(f"  ⚠️ {symbol}: No chart data")
+            # If no chart data, add TradingView link
+            chart_link = f"https://in.tradingview.com/chart/?symbol=NSE%3A{symbol}"
+            link_msg = f"📈 [View {symbol} Chart]({chart_link})"
+            await send_telegram_text(link_msg)
+            print(f"  📤 {symbol}: Chart link sent")
         
-        return False
+        return True
         
     except Exception as e:
         print(f"  ❌ {symbol}: {e}")
