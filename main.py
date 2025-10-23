@@ -272,7 +272,7 @@ def create_candlestick_chart(candles, symbol, spot_price):
     if not candles or len(candles) < 10:
         return None
     
-    # Parse candles and filter for market hours (9:15 AM - 3:30 PM IST)
+    # Parse candles and filter for market hours (9:15 AM - 3:30 PM IST) + weekdays only
     dates = []
     opens = []
     highs = []
@@ -285,13 +285,18 @@ def create_candlestick_chart(candles, symbol, spot_price):
             timestamp = datetime.fromisoformat(candle[0].replace('Z', '+00:00'))
             timestamp = timestamp.astimezone(IST)
             
+            # Skip weekends (Saturday=5, Sunday=6)
+            if timestamp.weekday() >= 5:
+                continue
+            
             # Filter: Only market hours (9:15 AM to 3:30 PM IST)
             hour = timestamp.hour
             minute = timestamp.minute
             
-            # Skip if before 9:15 AM or after 3:30 PM
+            # Skip if before 9:15 AM
             if hour < 9 or (hour == 9 and minute < 15):
                 continue
+            # Skip if after 3:30 PM
             if hour > 15 or (hour == 15 and minute > 30):
                 continue
             
