@@ -20,43 +20,43 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BASE_URL = "https://api.upstox.com"
 IST = pytz.timezone('Asia/Kolkata')
 
-# Nifty 50 Stocks with active options
+# Nifty 50 Stocks - CORRECT ISIN codes
 NIFTY50_STOCKS = {
     "NSE_EQ|INE002A01018": "RELIANCE",
     "NSE_EQ|INE040A01034": "HDFCBANK",
     "NSE_EQ|INE090A01021": "ICICIBANK",
-    "NSE_EQ|INE030A01027": "SBIN",
+    "NSE_EQ|INE062A01020": "SBIN",
     "NSE_EQ|INE009A01021": "INFY",
-    "NSE_EQ|INE467B01029": "TATASTEEL",
+    "NSE_EQ|INE081A01020": "TATASTEEL",  # FIXED
     "NSE_EQ|INE155A01022": "TATAMOTORS",
-    "NSE_EQ|INE018A01030": "HCLTECH",
-    "NSE_EQ|INE019A01038": "AXISBANK",
-    "NSE_EQ|INE114A01011": "BHARTIARTL",
-    "NSE_EQ|INE397D01024": "MARUTI",
-    "NSE_EQ|INE216A01030": "KOTAKBANK",
-    "NSE_EQ|INE192A01025": "SUNPHARMA",
-    "NSE_EQ|INE238A01034": "TITAN",
-    "NSE_EQ|INE205A01025": "ULTRACEMCO",
-    "NSE_EQ|INE423A01024": "ADANIPORTS",
-    "NSE_EQ|INE752E01010": "ADANIENT",
-    "NSE_EQ|INE758T01015": "TATACONSUM",
-    "NSE_EQ|INE062A01020": "POWERGRID",
-    "NSE_EQ|INE084A01016": "LT",
-    "NSE_EQ|INE242A01010": "ITC",
-    "NSE_EQ|INE860A01027": "HINDUNILVR",
-    "NSE_EQ|INE059A01026": "COALINDIA",
-    "NSE_EQ|INE121A01024": "INDUSINDBK",
+    "NSE_EQ|INE860A01027": "HCLTECH",
+    "NSE_EQ|INE238A01034": "AXISBANK",
+    "NSE_EQ|INE397D01024": "BHARTIARTL",  # FIXED
+    "NSE_EQ|INE101A01026": "MARUTI",  # FIXED
+    "NSE_EQ|INE237A01028": "KOTAKBANK",  # FIXED
+    "NSE_EQ|INE044A01036": "SUNPHARMA",
+    "NSE_EQ|INE280A01028": "TITAN",
+    "NSE_EQ|INE481G01011": "ULTRACEMCO",
+    "NSE_EQ|INE742F01042": "ADANIPORTS",
+    "NSE_EQ|INE423A01024": "ADANIENT",
+    "NSE_EQ|INE192A01025": "TATACONSUM",
+    "NSE_EQ|INE752E01010": "POWERGRID",
+    "NSE_EQ|INE018A01030": "LT",
+    "NSE_EQ|INE154A01025": "ITC",
+    "NSE_EQ|INE030A01027": "HINDUNILVR",
+    "NSE_EQ|INE522F01014": "COALINDIA",
+    "NSE_EQ|INE095A01012": "INDUSINDBK",
     "NSE_EQ|INE628A01036": "UPL",
     "NSE_EQ|INE129A01019": "GAIL",
-    "NSE_EQ|INE070A01015": "BAJAJFINSV",
-    "NSE_EQ|INE758E01017": "BAJAJAUTO",
-    "NSE_EQ|INE079A01024": "CIPLA",
-    "NSE_EQ|INE154A01025": "DRREDDY",
+    "NSE_EQ|INE918I01018": "BAJAJFINSV",
+    "NSE_EQ|INE917I01010": "BAJAJAUTO",
+    "NSE_EQ|INE059B01024": "CIPLA",
+    "NSE_EQ|INE089A01023": "DRREDDY",
     "NSE_EQ|INE066A01021": "EICHERMOT",
-    "NSE_EQ|INE075A01022": "DIVISLAB",
+    "NSE_EQ|INE361B01024": "DIVISLAB",
     "NSE_EQ|INE021A01026": "ASIANPAINT",
-    "NSE_EQ|INE848E01016": "NYKAA",
-    "NSE_EQ|INE669E01016": "DMART",
+    "NSE_EQ|INE528G01035": "NYKAA",
+    "NSE_EQ|INE192R01011": "DMART",
 }
 
 print("🚀 NIFTY 50 UPSTOX MONITOR")
@@ -463,34 +463,58 @@ async def send_telegram_photo(photo_buf, caption):
         return False
 
 async def process_stock(instrument_key, symbol, idx, total):
-    """Process stock"""
+    """Process stock - WITH VALIDATION"""
     print(f"\n[{idx}/{total}] {symbol}")
+    print(f"  🔑 Key: {instrument_key}")
     
     try:
         expiry = get_next_expiry(instrument_key)
         spot = get_spot_price(instrument_key)
         
         if spot == 0:
-            print(f"  ⚠️ Invalid spot")
+            print(f"  ⚠️ Invalid spot price")
             return False
+        
+        # VALIDATION: Check if price matches expected range for stock
+        price_ranges = {
+            "TATASTEEL": (200, 400),
+            "MARUTI": (10000, 14000),
+            "KOTAKBANK": (1500, 2000),
+            "LT": (3000, 4500),
+            "BAJAJFINSV": (1400, 2000),
+            "BHARTIARTL": (1500, 2000),
+            "HDFCBANK": (1600, 1900),
+            "RELIANCE": (1200, 1400),
+            "ICICIBANK": (1200, 1500),
+            "SBIN": (700, 900),
+        }
+        
+        if symbol in price_ranges:
+            min_price, max_price = price_ranges[symbol]
+            if not (min_price <= spot <= max_price):
+                print(f"  ⚠️ PRICE MISMATCH! Got ₹{spot:.2f}, expected ₹{min_price}-{max_price}")
+                print(f"  ❌ Wrong instrument_key or API data issue!")
+                return False
         
         strikes = get_option_chain(instrument_key, expiry)
         
         if not strikes or len(strikes) < 11:
-            print(f"  ⚠️ Insufficient strikes")
+            print(f"  ⚠️ Insufficient strikes ({len(strikes) if strikes else 0})")
             return False
         
-        print(f"  ✅ ₹{spot:.2f} | {len(strikes)} strikes")
+        print(f"  ✅ Spot: ₹{spot:.2f} | Strikes: {len(strikes)}")
         
+        # Double check: Symbol in message should match
         msg = format_detailed_message(symbol, spot, expiry, strikes)
         
         if not msg:
+            print(f"  ⚠️ Message format failed")
             return False
         
         await send_telegram_text(msg)
         print(f"  📤 Option chain sent")
         
-        # Try to get historical data
+        # Get chart data
         print(f"  📊 Fetching candles...")
         candles = get_historical_candles(instrument_key, symbol)
         
@@ -499,17 +523,19 @@ async def process_stock(instrument_key, symbol, idx, total):
             chart_buf = create_candlestick_chart(candles, symbol, spot)
             
             if chart_buf:
-                caption = f"📈 *{symbol}* - 5min Upstox Chart\n💰 Spot: ₹{spot:.2f}"
+                caption = f"📈 *{symbol}* - 5min Chart\n💰 Spot: ₹{spot:.2f}\n🔑 {instrument_key.split('|')[1][:12]}"
                 await send_telegram_photo(chart_buf, caption)
                 print(f"  📤 Chart sent!")
                 return True
         else:
-            print(f"  ⚠️ No chart data from Upstox")
+            print(f"  ⚠️ No chart data")
         
         return True
         
     except Exception as e:
         print(f"  ❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 async def fetch_all():
