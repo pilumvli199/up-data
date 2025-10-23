@@ -59,10 +59,16 @@ NIFTY50_STOCKS = {
     "NSE_EQ|INE192R01011": "DMART",
 }
 
-print("🚀 NIFTY 50 UPSTOX MONITOR - COMPLETE")
-print(f"📊 {len(NIFTY50_STOCKS)} stocks")
-print(f"📈 Option Chain + Professional Charts")
-print(f"⏰ Every 5 minutes")
+print("\n" + "="*70)
+print("🚀 NIFTY 50 - UPSTOX MONITOR")
+print("="*70)
+print("📊 Option Chain: Real-time data with PCR analysis")
+print("📈 Charts: 15-minute candlestick (7 Days)")
+print("🎨 Style: Professional TradingView theme")
+print("🔑 Source: 100% Upstox API v2/v3")
+print("⏰ Interval: Every 5 minutes")
+print("📱 Output: Telegram notifications")
+print("="*70 + "\n")
 
 # ==================== UPSTOX API FUNCTIONS ====================
 
@@ -291,28 +297,34 @@ def create_candlestick_chart(candles, symbol, spot_price):
     if len(dates) < 10:
         return None
     
-    # Create figure - TradingView style
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10), 
-                                     gridspec_kw={'height_ratios': [3.5, 1]})
+    # Create figure - Clean professional style
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 11), 
+                                     gridspec_kw={'height_ratios': [4, 1]})
     
-    # White background like TradingView
-    fig.patch.set_facecolor('white')
-    ax1.set_facecolor('white')
-    ax2.set_facecolor('white')
+    # White background
+    fig.patch.set_facecolor('#ffffff')
+    ax1.set_facecolor('#ffffff')
+    ax2.set_facecolor('#fafafa')
     
-    # Plot candlesticks
-    candle_width = 0.0003
+    # Calculate candle width based on data density
+    if len(dates) > 1:
+        time_diff = (dates[-1] - dates[0]).total_seconds() / 3600 / len(dates)
+        candle_width = time_diff / 48  # Dynamic width
+    else:
+        candle_width = 0.004
     
+    # Plot candlesticks with better styling
     for i in range(len(dates)):
         is_bullish = closes[i] >= opens[i]
         
-        # TradingView colors
-        body_color = '#26a69a' if is_bullish else '#ef5350'
-        wick_color = '#26a69a' if is_bullish else '#ef5350'
+        # Professional colors
+        body_color = '#089981' if is_bullish else '#f23645'  # TradingView exact
+        wick_color = body_color
         
-        # Draw wick
+        # Draw wick (thinner, cleaner)
         ax1.plot([dates[i], dates[i]], [lows[i], highs[i]], 
-                color=wick_color, linewidth=1.2, alpha=0.9, solid_capstyle='round')
+                color=wick_color, linewidth=1.0, alpha=1.0, 
+                solid_capstyle='round', zorder=2)
         
         # Draw candle body
         height = abs(closes[i] - opens[i])
@@ -324,62 +336,86 @@ def create_candlestick_chart(candles, symbol, spot_price):
                            facecolor=body_color, 
                            edgecolor=body_color, 
                            alpha=1.0,
-                           linewidth=0)
+                           linewidth=0,
+                           zorder=3)
             ax1.add_patch(rect)
         else:
-            # Doji
+            # Doji - thin line
             ax1.plot([mdates.date2num(dates[i]) - candle_width/2, 
                      mdates.date2num(dates[i]) + candle_width/2], 
                     [opens[i], opens[i]], 
-                    color=body_color, linewidth=2, solid_capstyle='butt')
+                    color=body_color, linewidth=1.5, solid_capstyle='butt', zorder=3)
     
-    # Spot price line
-    ax1.axhline(y=spot_price, color='#2962ff', linestyle='--', 
-               linewidth=1.8, label=f'Current: ₹{spot_price:.2f}', alpha=0.8)
+    # Current price line (clean blue)
+    ax1.axhline(y=spot_price, color='#2962FF', linestyle='--', 
+               linewidth=1.5, alpha=0.85, zorder=4)
     
-    # Styling
-    ax1.set_ylabel('Price (₹)', color='#131722', fontsize=12, fontweight='600')
-    ax1.tick_params(colors='#131722', labelsize=10)
-    ax1.grid(True, alpha=0.15, color='#d1d4dc', linestyle='-', linewidth=0.5)
-    ax1.legend(loc='upper left', fontsize=11, facecolor='white', 
-              edgecolor='#e0e3eb', labelcolor='#131722', framealpha=1)
+    # Price label on right axis
+    ax1_right = ax1.twinx()
+    ax1_right.set_ylim(ax1.get_ylim())
+    ax1_right.set_yticks([spot_price])
+    ax1_right.set_yticklabels([f'₹{spot_price:.2f}'], fontsize=10, 
+                              fontweight='600', color='#2962FF')
+    ax1_right.tick_params(colors='#2962FF', length=0)
     
-    title = f'{symbol} - 15 Minute Chart | Last 7 Days'
-    ax1.set_title(title, color='#131722', fontsize=15, fontweight='700', pad=20)
+    # Styling - Clean and minimal
+    ax1.set_ylabel('Price (₹)', color='#787B86', fontsize=11, fontweight='500')
+    ax1.tick_params(axis='y', colors='#787B86', labelsize=9.5)
+    ax1.tick_params(axis='x', colors='#787B86', labelsize=9)
     
-    # Volume bars
+    # Subtle grid
+    ax1.grid(True, alpha=0.12, color='#D1D4DC', linestyle='-', linewidth=0.5, zorder=1)
+    ax1.set_axisbelow(True)
+    
+    # Title - Clean and bold
+    title = f'{symbol}  •  15 Min  •  Last 7 Days'
+    ax1.set_title(title, color='#131722', fontsize=16, fontweight='600', 
+                 pad=20, loc='left')
+    
+    # Volume bars - Subtle transparency
     colors_vol = []
     for i in range(len(dates)):
         if closes[i] >= opens[i]:
-            colors_vol.append('#26a69a80')
+            colors_vol.append('#08998166')  # 40% opacity
         else:
-            colors_vol.append('#ef535080')
+            colors_vol.append('#f2364566')
     
-    ax2.bar(dates, volumes, color=colors_vol, width=candle_width, alpha=0.7)
+    ax2.bar(dates, volumes, color=colors_vol, width=candle_width, 
+           alpha=1.0, edgecolor='none', zorder=2)
     
-    ax2.set_ylabel('Volume', color='#131722', fontsize=12, fontweight='600')
-    ax2.tick_params(colors='#131722', labelsize=10)
-    ax2.grid(True, alpha=0.15, color='#d1d4dc', linestyle='-', linewidth=0.5)
+    ax2.set_ylabel('Volume', color='#787B86', fontsize=11, fontweight='500')
+    ax2.tick_params(axis='y', colors='#787B86', labelsize=9.5)
+    ax2.tick_params(axis='x', colors='#787B86', labelsize=9)
+    ax2.grid(True, alpha=0.12, color='#D1D4DC', linestyle='-', linewidth=0.5, zorder=1)
+    ax2.set_axisbelow(True)
     
-    # Format x-axis
+    # Format x-axis - Better date formatting
+    date_format = mdates.DateFormatter('%d %b\n%H:%M', tz=IST)
     for ax in [ax1, ax2]:
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b\n%H:%M', tz=IST))
+        ax.xaxis.set_major_formatter(date_format)
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        ax.spines['top'].set_color('#e0e3eb')
-        ax.spines['right'].set_color('#e0e3eb')
-        ax.spines['bottom'].set_color('#e0e3eb')
-        ax.spines['left'].set_color('#e0e3eb')
+        
+        # Clean borders
+        for spine in ['top', 'right', 'bottom', 'left']:
+            ax.spines[spine].set_color('#E0E3EB')
+            ax.spines[spine].set_linewidth(0.8)
     
-    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=0, ha='center')
-    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=0, ha='center')
+    # Remove right spine from ax1 (we have twin axis)
+    ax1.spines['right'].set_visible(False)
     
-    ax2.set_xlabel('Date & Time (IST)', color='#131722', fontsize=12, fontweight='600')
+    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
     
-    plt.tight_layout()
+    ax2.set_xlabel('Date & Time (IST)', color='#787B86', fontsize=11, fontweight='500', labelpad=10)
     
+    # Adjust layout
+    plt.tight_layout(pad=1.5)
+    plt.subplots_adjust(hspace=0.05)
+    
+    # Save with high quality
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=120, facecolor='white', 
-               edgecolor='none', bbox_inches='tight')
+    plt.savefig(buf, format='png', dpi=150, facecolor='white', 
+               edgecolor='none', bbox_inches='tight', pad_inches=0.2)
     buf.seek(0)
     plt.close(fig)
     
@@ -507,18 +543,18 @@ async def process_stock(instrument_key, symbol, idx, total):
             print(f"  ⚠️ Invalid spot price")
             return False
         
-        # Validate price ranges
+        # Validate price ranges (Updated Oct 2024)
         price_ranges = {
-            "TATASTEEL": (200, 400),
+            "TATASTEEL": (150, 250),
             "MARUTI": (10000, 14000),
             "KOTAKBANK": (1500, 2000),
             "LT": (3000, 4500),
             "BAJAJFINSV": (1400, 2000),
-            "BHARTIARTL": (1500, 2000),
-            "HDFCBANK": (1600, 1900),
-            "RELIANCE": (1200, 1400),
+            "BHARTIARTL": (1800, 2200),
+            "HDFCBANK": (900, 1200),
+            "RELIANCE": (1300, 1600),
             "ICICIBANK": (1200, 1500),
-            "SBIN": (700, 900),
+            "SBIN": (800, 1000),
         }
         
         if symbol in price_ranges:
@@ -626,15 +662,15 @@ async def monitoring_loop():
 
 async def main():
     """Main entry point"""
-    print("\n" + "="*60)
-    print("🚀 NIFTY 50 - PURE UPSTOX API")
-    print("="*60)
-    print("📊 Option Chain: Full data")
-    print("📈 Charts: 15min candlestick (7 Days)")
-    print("🎨 Style: TradingView Professional")
-    print("🔑 Source: 100% Upstox API")
-    print("⏰ Every 5 minutes")
-    print("="*60)
+    print("\n" + "="*70)
+    print("🚀 STARTING NIFTY 50 MONITOR")
+    print("="*70)
+    print(f"📊 Tracking: {len(NIFTY50_STOCKS)} stocks")
+    print("📈 Data: Option Chain + 15min Charts (7 Days)")
+    print("🎨 Theme: Professional TradingView style")
+    print("🔑 API: Pure Upstox (v2/v3)")
+    print("⏰ Frequency: Every 5 minutes")
+    print("="*70 + "\n")
     
     await monitoring_loop()
 
