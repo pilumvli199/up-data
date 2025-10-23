@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# nifty50_all_options.py - Complete option chain with 11 strikes (ATM ±5)
+# nifty50_options_with_charts.py - Option Chain + 5min Candlestick Charts (7 days)
 
 import os
 import asyncio
@@ -8,6 +8,10 @@ import urllib.parse
 from datetime import datetime, timedelta
 import pytz
 from telegram import Bot
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.patches import Rectangle
+import io
 
 # Config
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
@@ -16,7 +20,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BASE_URL = "https://api.upstox.com"
 IST = pytz.timezone('Asia/Kolkata')
 
-# Nifty 50 Stocks - ONLY stocks with active options
+# Nifty 50 Stocks with active options
 NIFTY50_STOCKS = {
     "NSE_EQ|INE002A01018": "RELIANCE",
     "NSE_EQ|INE040A01034": "HDFCBANK",
@@ -55,10 +59,10 @@ NIFTY50_STOCKS = {
     "NSE_EQ|INE669E01016": "DMART",
 }
 
-print("🚀 NIFTY 50 OPTIONS MONITOR")
+print("🚀 NIFTY 50 OPTIONS + CHARTS MONITOR")
 print(f"📊 Tracking {len(NIFTY50_STOCKS)} stocks")
+print(f"📈 5min Candlestick Charts (7 days)")
 print(f"⏰ Updates every 5 minutes")
-print(f"📱 Sending to Telegram: {TELEGRAM_CHAT_ID}")
 
 def get_expiries(instrument_key):
     """Get expiries for a stock"""
@@ -83,7 +87,7 @@ def get_expiries(instrument_key):
             
             return sorted(list(expiries))
     except Exception as e:
-        print(f"⚠️ Expiry fetch error: {e}")
+        print(f"⚠️ Expiry error: {e}")
     
     return []
 
@@ -91,7 +95,6 @@ def get_next_expiry(instrument_key):
     """Get next valid expiry"""
     expiries = get_expiries(instrument_key)
     if not expiries:
-        # Fallback to next Thursday
         today = datetime.now(IST)
         days_ahead = 3 - today.weekday()
         if days_ahead <= 0:
@@ -106,7 +109,7 @@ def get_next_expiry(instrument_key):
     return expiries[0]
 
 def get_option_chain(instrument_key, expiry):
-    """Get option chain data for a stock"""
+    """Get option chain data"""
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
@@ -121,12 +124,12 @@ def get_option_chain(instrument_key, expiry):
             data = resp.json()
             return data.get('data', [])
     except Exception as e:
-        print(f"⚠️ Chain fetch error: {e}")
+        print(f"⚠️ Chain error: {e}")
     
     return []
 
 def get_spot_price(instrument_key):
-    """Get spot price for a stock"""
+    """Get spot price"""
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
@@ -145,26 +148,166 @@ def get_spot_price(instrument_key):
                 ltp = quote_data[first_key].get('last_price', 0)
                 return float(ltp) if ltp else 0
     except Exception as e:
-        print(f"⚠️ Spot price error: {e}")
+        print(f"⚠️ Spot error: {e}")
     
     return 0
 
+def get_historical_data(instrument_key, symbol):
+    """Get 5min historical data for last 7 days"""
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
+    }
+    
+    # Calculate dates
+    to_date = datetime.now(IST)
+    from_date = to_date - timedelta(days=7)
+    
+    # Format dates for API
+    to_date_str = to_date.strftime('%Y-%m-%d')
+    from_date_str = from_date.strftime('%Y-%m-%d')
+    
+    encoded_key = urllib.parse.quote(instrument_key, safe='')
+    url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/5minute/{to_date_str}/{from_date_str}"
+    
+    try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            candles = data.get('data', {}).get('candles', [])
+            
+            if candles:
+                print(f"  📊 {symbol}: Got {len(candles)} candles")
+                return candles
+            else:
+                print(f"  ⚠️ {symbol}: No candle data")
+        else:
+            print(f"  ⚠️ {symbol}: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"  ❌ {symbol}: Historical error - {e}")
+    
+    return []
+
+def create_candlestick_chart(candles, symbol, spot_price):
+    """Create candlestick chart from data"""
+    if not candles or len(candles) < 10:
+        return None
+    
+    # Parse candle data: [timestamp, open, high, low, close, volume, oi]
+    dates = []
+    opens = []
+    highs = []
+    lows = []
+    closes = []
+    volumes = []
+    
+    for candle in reversed(candles):  # Reverse for chronological order
+        try:
+            timestamp = datetime.fromisoformat(candle[0].replace('Z', '+00:00'))
+            timestamp = timestamp.astimezone(IST)
+            
+            dates.append(timestamp)
+            opens.append(float(candle[1]))
+            highs.append(float(candle[2]))
+            lows.append(float(candle[3]))
+            closes.append(float(candle[4]))
+            volumes.append(int(candle[5]))
+        except Exception as e:
+            continue
+    
+    if len(dates) < 10:
+        return None
+    
+    # Create figure with subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), 
+                                     gridspec_kw={'height_ratios': [3, 1]})
+    
+    fig.patch.set_facecolor('#0a0a0a')
+    ax1.set_facecolor('#0f0f0f')
+    ax2.set_facecolor('#0f0f0f')
+    
+    # Plot candlesticks
+    for i in range(len(dates)):
+        color = '#00ff00' if closes[i] >= opens[i] else '#ff0000'
+        
+        # Draw high-low line
+        ax1.plot([dates[i], dates[i]], [lows[i], highs[i]], 
+                color=color, linewidth=0.8, alpha=0.8)
+        
+        # Draw candle body
+        height = abs(closes[i] - opens[i])
+        bottom = min(opens[i], closes[i])
+        
+        if height > 0:
+            rect = Rectangle((mdates.date2num(dates[i]) - 0.0001, bottom),
+                           0.0002, height, facecolor=color, 
+                           edgecolor=color, alpha=0.9)
+            ax1.add_patch(rect)
+        else:
+            # Doji - draw horizontal line
+            ax1.plot([dates[i], dates[i]], [opens[i], opens[i]], 
+                    color=color, linewidth=1.5)
+    
+    # Add spot price line
+    ax1.axhline(y=spot_price, color='#ffff00', linestyle='--', 
+               linewidth=1.5, label=f'Spot: ₹{spot_price:.2f}', alpha=0.7)
+    
+    # Format price axis
+    ax1.set_ylabel('Price (₹)', color='white', fontsize=11, fontweight='bold')
+    ax1.tick_params(colors='white', labelsize=9)
+    ax1.grid(True, alpha=0.2, color='#333333', linestyle=':')
+    ax1.legend(loc='upper left', fontsize=10, facecolor='#1a1a1a', 
+              edgecolor='#333333', labelcolor='white')
+    
+    # Title
+    title = f'{symbol} - 5 Minute Candlestick Chart (Last 7 Days)'
+    ax1.set_title(title, color='white', fontsize=14, fontweight='bold', pad=15)
+    
+    # Volume bars
+    colors_vol = ['#00ff0060' if closes[i] >= opens[i] else '#ff000060' 
+                  for i in range(len(dates))]
+    ax2.bar(dates, volumes, color=colors_vol, width=0.0002, alpha=0.8)
+    
+    ax2.set_ylabel('Volume', color='white', fontsize=11, fontweight='bold')
+    ax2.tick_params(colors='white', labelsize=9)
+    ax2.grid(True, alpha=0.2, color='#333333', linestyle=':')
+    
+    # Format x-axis for both subplots
+    for ax in [ax1, ax2]:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%b %H:%M', tz=IST))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    
+    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha='right')
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
+    
+    ax2.set_xlabel('Date & Time (IST)', color='white', fontsize=11, fontweight='bold')
+    
+    plt.tight_layout()
+    
+    # Save to bytes buffer
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=100, facecolor='#0a0a0a', 
+               edgecolor='none', bbox_inches='tight')
+    buf.seek(0)
+    plt.close(fig)
+    
+    return buf
+
 def format_detailed_message(symbol, spot, expiry, strikes):
-    """Format detailed message with 11 strikes (ATM ±5) and full data"""
+    """Format option chain message"""
     if not strikes or len(strikes) < 11:
         return None
     
-    # Find ATM strike
+    # Find ATM
     atm_index = len(strikes) // 2
     if spot > 0:
         atm_index = min(range(len(strikes)), 
                        key=lambda i: abs(strikes[i].get('strike_price', 0) - spot))
     
-    # Select 11 strikes: ATM + 5 up + 5 down
+    # Select 11 strikes
     start = max(0, atm_index - 5)
     end = min(len(strikes), atm_index + 6)
     
-    # Adjust if we don't have enough strikes on either side
     if end - start < 11:
         if start == 0:
             end = min(11, len(strikes))
@@ -173,7 +316,7 @@ def format_detailed_message(symbol, spot, expiry, strikes):
     
     selected = strikes[start:end]
     
-    msg = f"📊 *{symbol}*\n\n"
+    msg = f"📊 *{symbol} OPTION CHAIN*\n\n"
     msg += f"💰 Spot: ₹{spot:,.2f}\n"
     msg += f"📅 Expiry: {expiry}\n"
     msg += f"🎯 ATM: ₹{strikes[atm_index].get('strike_price', 0):,.2f}\n\n"
@@ -193,13 +336,11 @@ def format_detailed_message(symbol, spot, expiry, strikes):
         
         strike = s.get('strike_price', 0)
         
-        # Call data
         call = s.get('call_options', {}).get('market_data', {})
         ce_ltp = call.get('ltp', 0)
         ce_vol = call.get('volume', 0)
         ce_oi = call.get('oi', 0)
         
-        # Put data
         put = s.get('put_options', {}).get('market_data', {})
         pe_ltp = put.get('ltp', 0)
         pe_vol = put.get('volume', 0)
@@ -210,7 +351,6 @@ def format_detailed_message(symbol, spot, expiry, strikes):
         total_ce_vol += ce_vol
         total_pe_vol += pe_vol
         
-        # Format with K for thousands
         ce_vol_k = ce_vol / 1000 if ce_vol > 0 else 0
         ce_oi_k = ce_oi / 1000 if ce_oi > 0 else 0
         pe_vol_k = pe_vol / 1000 if pe_vol > 0 else 0
@@ -220,7 +360,6 @@ def format_detailed_message(symbol, spot, expiry, strikes):
     
     msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     
-    # Totals
     total_ce_vol_k = total_ce_vol / 1000
     total_ce_oi_k = total_ce_oi / 1000
     total_pe_vol_k = total_pe_vol / 1000
@@ -229,7 +368,6 @@ def format_detailed_message(symbol, spot, expiry, strikes):
     msg += f"TOTAL          {total_ce_vol_k:7.1f}K {total_ce_oi_k:7.1f}K        {total_pe_vol_k:7.1f}K {total_pe_oi_k:7.1f}K\n"
     msg += "```\n\n"
     
-    # PCR Calculation
     pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
     pcr_vol = total_pe_vol / total_ce_vol if total_ce_vol > 0 else 0
     
@@ -239,35 +377,38 @@ def format_detailed_message(symbol, spot, expiry, strikes):
     
     return msg
 
-async def send_telegram(msg):
-    """Send message to Telegram"""
+async def send_telegram_text(msg):
+    """Send text message"""
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        # Split long messages if needed (Telegram limit: 4096 chars)
-        if len(msg) > 4000:
-            # Send in chunks
-            chunks = [msg[i:i+4000] for i in range(0, len(msg), 4000)]
-            for chunk in chunks:
-                await bot.send_message(
-                    chat_id=TELEGRAM_CHAT_ID, 
-                    text=chunk, 
-                    parse_mode='Markdown'
-                )
-                await asyncio.sleep(1)
-        else:
-            await bot.send_message(
-                chat_id=TELEGRAM_CHAT_ID, 
-                text=msg, 
-                parse_mode='Markdown'
-            )
+        await bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID, 
+            text=msg, 
+            parse_mode='Markdown'
+        )
         return True
     except Exception as e:
-        print(f"❌ Telegram error: {e}")
+        print(f"❌ Text error: {e}")
         return False
 
-async def fetch_and_send_stock(instrument_key, symbol, idx, total):
-    """Fetch and send option chain for a single stock"""
-    print(f"[{idx}/{total}] Fetching {symbol}...")
+async def send_telegram_photo(photo_buf, caption):
+    """Send photo with caption"""
+    try:
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        await bot.send_photo(
+            chat_id=TELEGRAM_CHAT_ID,
+            photo=photo_buf,
+            caption=caption,
+            parse_mode='Markdown'
+        )
+        return True
+    except Exception as e:
+        print(f"❌ Photo error: {e}")
+        return False
+
+async def process_stock(instrument_key, symbol, idx, total):
+    """Process single stock - fetch data and send"""
+    print(f"\n[{idx}/{total}] Processing {symbol}...")
     
     try:
         # Get expiry
@@ -277,27 +418,48 @@ async def fetch_and_send_stock(instrument_key, symbol, idx, total):
         spot = get_spot_price(instrument_key)
         
         if spot == 0:
-            print(f"  ⚠️ {symbol}: Invalid spot price")
+            print(f"  ⚠️ {symbol}: Invalid spot")
             return False
         
         # Get option chain
         strikes = get_option_chain(instrument_key, expiry)
         
         if not strikes or len(strikes) < 11:
-            print(f"  ⚠️ {symbol}: Insufficient strikes ({len(strikes)})")
+            print(f"  ⚠️ {symbol}: Insufficient strikes")
             return False
         
         print(f"  ✅ {symbol}: ₹{spot:.2f} | {len(strikes)} strikes")
         
-        # Format message
+        # Format option chain message
         msg = format_detailed_message(symbol, spot, expiry, strikes)
         
-        if msg:
-            # Send to Telegram
-            success = await send_telegram(msg)
-            if success:
-                print(f"  📤 {symbol}: Sent to Telegram!")
-                return True
+        if not msg:
+            print(f"  ⚠️ {symbol}: Message format failed")
+            return False
+        
+        # Send option chain
+        success = await send_telegram_text(msg)
+        if success:
+            print(f"  📤 {symbol}: Option chain sent")
+        
+        # Get historical data
+        print(f"  📊 {symbol}: Fetching 5min candles...")
+        candles = get_historical_data(instrument_key, symbol)
+        
+        if candles and len(candles) >= 10:
+            # Create chart
+            print(f"  📈 {symbol}: Creating chart...")
+            chart_buf = create_candlestick_chart(candles, symbol, spot)
+            
+            if chart_buf:
+                # Send chart
+                caption = f"📈 *{symbol}* - 5min Chart (7 days)\n💰 Spot: ₹{spot:.2f}"
+                success = await send_telegram_photo(chart_buf, caption)
+                if success:
+                    print(f"  📤 {symbol}: Chart sent!")
+                    return True
+        else:
+            print(f"  ⚠️ {symbol}: No chart data")
         
         return False
         
@@ -305,80 +467,65 @@ async def fetch_and_send_stock(instrument_key, symbol, idx, total):
         print(f"  ❌ {symbol}: {e}")
         return False
 
-async def fetch_all_stocks():
-    """Fetch and send option chain for all stocks"""
+async def fetch_all():
+    """Fetch and send all stocks"""
     print("\n" + "="*60)
     print(f"⏰ {datetime.now(IST).strftime('%I:%M:%S %p IST')}")
-    print("📊 Fetching option chains for all stocks...")
-    print("="*60 + "\n")
+    print("="*60)
     
-    # Send header message
-    header_msg = f"🚀 *NIFTY 50 OPTION CHAINS - UPDATE*\n"
-    header_msg += f"⏰ {datetime.now(IST).strftime('%I:%M %p IST')}\n"
-    header_msg += f"📊 {len(NIFTY50_STOCKS)} Stocks\n"
-    header_msg += f"📈 11 Strikes per stock (ATM ±5)\n\n"
-    header_msg += f"_Starting data fetch..._"
+    header = f"🚀 *NIFTY 50 UPDATE*\n"
+    header += f"⏰ {datetime.now(IST).strftime('%I:%M %p IST')}\n"
+    header += f"📊 Option Chain + 5min Charts\n"
+    header += f"📈 {len(NIFTY50_STOCKS)} Stocks\n\n_Starting..._"
     
-    await send_telegram(header_msg)
+    await send_telegram_text(header)
     
-    success_count = 0
+    success = 0
     total = len(NIFTY50_STOCKS)
     
-    for idx, (instrument_key, symbol) in enumerate(NIFTY50_STOCKS.items(), 1):
-        success = await fetch_and_send_stock(instrument_key, symbol, idx, total)
-        
-        if success:
-            success_count += 1
-        
-        # Rate limiting - wait between requests
-        await asyncio.sleep(2)
+    for idx, (key, symbol) in enumerate(NIFTY50_STOCKS.items(), 1):
+        result = await process_stock(key, symbol, idx, total)
+        if result:
+            success += 1
+        await asyncio.sleep(3)  # Rate limit
     
-    # Send summary
-    summary_msg = f"\n✅ *UPDATE COMPLETE*\n"
-    summary_msg += f"📊 Successfully sent: {success_count}/{total} stocks\n"
-    summary_msg += f"⏰ {datetime.now(IST).strftime('%I:%M %p IST')}"
-    
-    await send_telegram(summary_msg)
+    summary = f"\n✅ *COMPLETE*\n📊 {success}/{total} stocks\n⏰ {datetime.now(IST).strftime('%I:%M %p')}"
+    await send_telegram_text(summary)
     
     print("\n" + "="*60)
-    print(f"✅ Sent {success_count}/{total} stocks to Telegram")
+    print(f"✅ Complete: {success}/{total}")
     print("="*60)
 
 async def monitoring_loop():
-    """Main monitoring loop - runs every 5 minutes"""
-    print("\n🔄 Starting monitoring loop...")
+    """Main loop - every 5 minutes"""
+    print("\n🔄 Starting loop...")
     print("🔄 Press Ctrl+C to stop\n")
     
     while True:
         try:
-            # Fetch and send all stocks
-            await fetch_all_stocks()
+            await fetch_all()
             
-            # Wait 5 minutes
-            print(f"\n⏳ Next update in 5 minutes...")
-            print(f"⏳ Next run at: {(datetime.now(IST) + timedelta(minutes=5)).strftime('%I:%M %p IST')}\n")
+            next_time = (datetime.now(IST) + timedelta(minutes=5)).strftime('%I:%M %p')
+            print(f"\n⏳ Next update: {next_time}\n")
             
-            await asyncio.sleep(300)  # 5 minutes = 300 seconds
+            await asyncio.sleep(300)
             
         except KeyboardInterrupt:
-            print("\n\n🛑 Monitoring stopped by user")
+            print("\n\n🛑 Stopped")
             break
         except Exception as e:
-            print(f"\n❌ Error in monitoring loop: {e}")
-            print("⏳ Retrying in 1 minute...")
+            print(f"\n❌ Error: {e}")
             await asyncio.sleep(60)
 
 async def main():
     print("\n" + "="*60)
-    print("🚀 NIFTY 50 OPTIONS MONITOR - FULL DATA")
+    print("🚀 NIFTY 50 OPTIONS + CHARTS MONITOR")
     print("="*60)
-    print(f"📊 11 Strikes per stock (ATM + 5 up + 5 down)")
-    print(f"📈 Complete Option Chain: LTP, Volume, OI, PCR")
-    print(f"⏰ Updates every 5 minutes")
-    print(f"📱 Telegram: {TELEGRAM_CHAT_ID}")
+    print("📊 Option Chain: 11 strikes, full data")
+    print("📈 Charts: 5min candlestick, 7 days")
+    print("⏰ Updates: Every 5 minutes")
     print("="*60)
     
-    # Run monitoring loop
     await monitoring_loop()
 
 if __name__ == "__main__":
