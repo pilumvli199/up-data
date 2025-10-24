@@ -235,18 +235,23 @@ def aggregate_1min_to_15min(candles_1min):
     return candles_15min
 
 def get_historical_candles(instrument_key, symbol):
-    """Get historical candle data - Combine INTRADAY + HISTORICAL for complete view"""
+    """Get historical candle data - Combine INTRADAY + HISTORICAL with AUTH"""
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
+    }
+    
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     
     today_candles = []
     historical_candles = []
     
-    # Step 1: Get TODAY'S LIVE data (1-minute intraday)
+    # Step 1: Get TODAY'S LIVE data (1-minute intraday with AUTH)
     try:
         url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
-        print(f"  🔍 V2 Intraday (1min, TODAY)...")
+        print(f"  🔍 V2 Intraday (1min, TODAY with AUTH)...")
         
-        resp = requests.get(url, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=15)
         
         if resp.status_code == 200:
             data = resp.json()
@@ -256,21 +261,24 @@ def get_historical_candles(instrument_key, symbol):
                     print(f"  ✅ Today: {len(candles_1min)} 1min candles (LIVE)")
                     today_candles = aggregate_1min_to_15min(candles_1min)
                     print(f"  📊 Today: {len(today_candles)} 15min candles")
+        else:
+            print(f"  ⚠️ Intraday HTTP {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
         print(f"  ⚠️ Intraday 1min error: {e}")
     
-    # Step 2: Get HISTORICAL data (30-minute, last 7 days)
+    # Step 2: Get RECENT DAYS data (30-minute with AUTH, last 7 days)
     try:
-        to_date = datetime.now(IST) - timedelta(days=1)  # Yesterday
+        # Use today as end date, 7 days back as start
+        to_date = datetime.now(IST)
         from_date = to_date - timedelta(days=7)
         
         to_str = to_date.strftime('%Y-%m-%d')
         from_str = from_date.strftime('%Y-%m-%d')
         
         url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/30minute/{to_str}/{from_str}"
-        print(f"  🔍 V2 Historical (30min, 7 days)...")
+        print(f"  🔍 V2 Historical (30min, 7 days with AUTH)...")
         
-        resp = requests.get(url, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=15)
         
         if resp.status_code == 200:
             data = resp.json()
@@ -280,34 +288,36 @@ def get_historical_candles(instrument_key, symbol):
                     print(f"  ✅ History: {len(candles)} 30min candles")
                     historical_candles = split_30min_to_15min(candles)
                     print(f"  📊 History: {len(historical_candles)} 15min candles")
+        else:
+            print(f"  ⚠️ Historical HTTP {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
         print(f"  ⚠️ Historical error: {e}")
     
-    # Step 3: COMBINE historical + today (chronological order)
+    # Step 3: COMBINE historical + today
     if historical_candles and today_candles:
         combined = historical_candles + today_candles
         print(f"  ✅ COMBINED: {len(combined)} total candles (History + Today)")
         return combined
     elif today_candles:
-        print(f"  ⚠️ Only today's data: {len(today_candles)} candles")
+        print(f"  ⚠️ Only today: {len(today_candles)} candles")
         return today_candles
     elif historical_candles:
-        print(f"  ⚠️ Only historical data: {len(historical_candles)} candles")
+        print(f"  ⚠️ Only history: {len(historical_candles)} candles")
         return historical_candles
     
-    # Fallback: Try 30-minute intraday
+    # Fallback: Try 30-minute intraday with AUTH
     try:
         url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/30minute"
-        print(f"  🔍 Fallback: V2 Intraday (30min)...")
+        print(f"  🔍 Fallback: Intraday 30min with AUTH...")
         
-        resp = requests.get(url, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=15)
         
         if resp.status_code == 200:
             data = resp.json()
             if data.get('status') == 'success':
                 candles = data.get('data', {}).get('candles', [])
                 if candles and len(candles) > 0:
-                    print(f"  ✅ Got {len(candles)} 30min candles (today)")
+                    print(f"  ✅ Got {len(candles)} 30min candles")
                     candles_15min = split_30min_to_15min(candles)
                     print(f"  📊 Split to {len(candles_15min)} 15min candles")
                     return candles_15min
@@ -356,7 +366,7 @@ def create_candlestick_chart(candles, symbol, spot_price):
         except Exception as e:
             continue
     
-    if len(dates) < 10:
+    if len(dates) < 3:  # Reduced minimum requirement
         return None
     
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 11), 
@@ -622,7 +632,7 @@ async def process_stock(instrument_key, symbol, idx, total):
         print(f"  📊 Fetching candles...")
         candles = get_historical_candles(instrument_key, symbol)
         
-        if candles and len(candles) >= 10:
+        if candles and len(candles) >= 3:  # Reduced from 10 to 3
             print(f"  📈 Creating chart...")
             chart_buf = create_candlestick_chart(candles, symbol, spot)
             
