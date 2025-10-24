@@ -235,10 +235,56 @@ def aggregate_1min_to_15min(candles_1min):
     return candles_15min
 
 def get_historical_candles(instrument_key, symbol):
-    """Get historical candle data - 30 minute timeframe (split to 15min), 7 days"""
+    """Get historical candle data - INTRADAY FIRST for latest data"""
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     
-    # Method 1: V2 30-minute Historical (7 days) - NO AUTH NEEDED
+    # Method 1: V2 Intraday 1-minute (LATEST DATA - Today) - PRIORITY
+    try:
+        url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
+        print(f"  🔍 V2 Intraday (1min → 15min, LATEST)...")
+        
+        resp = requests.get(url, timeout=15)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('status') == 'success':
+                candles_1min = data.get('data', {}).get('candles', [])
+                if candles_1min and len(candles_1min) >= 15:
+                    print(f"  ✅ Got {len(candles_1min)} 1min candles (TODAY - LIVE)")
+                    candles_15min = aggregate_1min_to_15min(candles_1min)
+                    print(f"  📊 Aggregated to {len(candles_15min)} 15min candles")
+                    
+                    # If we have today's data, combine with historical for full 7-day view
+                    if len(candles_15min) > 0:
+                        print(f"  ✅ Using TODAY'S LIVE DATA")
+                        return candles_15min
+        
+        print(f"  ⚠️ V2 Intraday 1min: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"  ⚠️ V2 Intraday 1min error: {e}")
+    
+    # Method 2: V2 Intraday 30-minute (Today's 30min data)
+    try:
+        url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/30minute"
+        print(f"  🔍 V2 Intraday (30min, today)...")
+        
+        resp = requests.get(url, timeout=15)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('status') == 'success':
+                candles = data.get('data', {}).get('candles', [])
+                if candles and len(candles) > 0:
+                    print(f"  ✅ Got {len(candles)} 30min candles (today)")
+                    candles_15min = split_30min_to_15min(candles)
+                    print(f"  📊 Split to {len(candles_15min)} 15min candles")
+                    return candles_15min
+        
+        print(f"  ⚠️ V2 Intraday 30min: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"  ⚠️ V2 Intraday 30min error: {e}")
+    
+    # Method 3: V2 30-minute Historical (7 days backup)
     try:
         to_date = datetime.now(IST)
         from_date = to_date - timedelta(days=7)
@@ -247,7 +293,7 @@ def get_historical_candles(instrument_key, symbol):
         from_str = from_date.strftime('%Y-%m-%d')
         
         url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/30minute/{to_str}/{from_str}"
-        print(f"  🔍 V2 Historical (30min, 7 days)...")
+        print(f"  🔍 V2 Historical (30min, 7 days backup)...")
         
         resp = requests.get(url, timeout=15)
         
@@ -267,50 +313,8 @@ def get_historical_candles(instrument_key, symbol):
     except Exception as e:
         print(f"  ⚠️ V2 Historical error: {e}")
     
-    # Method 2: Fallback - V2 Intraday (Today's 30min data)
-    try:
-        url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/30minute"
-        print(f"  🔍 V2 Intraday (30min, today)...")
-        
-        resp = requests.get(url, timeout=15)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get('status') == 'success':
-                candles = data.get('data', {}).get('candles', [])
-                if candles and len(candles) > 0:
-                    print(f"  ✅ Got {len(candles)} 30min candles (today)")
-                    candles_15min = split_30min_to_15min(candles)
-                    print(f"  📊 Split to {len(candles_15min)} 15min candles")
-                    return candles_15min
-        
-        print(f"  ⚠️ V2 Intraday: HTTP {resp.status_code}")
-    except Exception as e:
-        print(f"  ⚠️ V2 Intraday error: {e}")
-    
-    # Method 3: Ultra Fallback - 1 minute data (aggregate to 15 min)
-    try:
-        url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
-        print(f"  🔍 V2 Ultra Fallback (1min → 15min)...")
-        
-        resp = requests.get(url, timeout=15)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get('status') == 'success':
-                candles_1min = data.get('data', {}).get('candles', [])
-                if candles_1min and len(candles_1min) >= 15:
-                    print(f"  ✅ Got {len(candles_1min)} 1min candles")
-                    candles_15min = aggregate_1min_to_15min(candles_1min)
-                    print(f"  📊 Aggregated to {len(candles_15min)} 15min candles")
-                    return candles_15min
-        
-        print(f"  ⚠️ V2 Ultra Fallback: HTTP {resp.status_code}")
-    except Exception as e:
-        print(f"  ⚠️ V2 Ultra Fallback error: {e}")
-    
     print(f"  ❌ {symbol}: No candle data available")
-    print(f"  💡 Check: 1) Market hours? 2) Instrument key? 3) API limit?")
+    print(f"  💡 Check: 1) Market open? 2) API working? 3) Token valid?")
     return []
 
 # ==================== CHART CREATION ====================
