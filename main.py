@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-NIFTY 50 + SENSEX + STOCKS MONITOR - ENHANCED VERSION
-- Clear historical + live data separation
-- Full option chain: Volume, OI, OI Changes, Greeks
-- Premium TradingView-style charts
+NIFTY 50 + SENSEX + STOCKS MONITOR - VISUAL OPTION CHAIN
+- Wide charts with clear historical data
+- Visual option chain images (Upstox-style format)
+- Full Greeks, Volume, OI data
 """
 
 import os
@@ -41,7 +41,7 @@ NIFTY50_STOCKS = {
 }
 
 print("="*70)
-print("🚀 NIFTY + SENSEX LIVE MONITOR - ENHANCED")
+print("🚀 NIFTY + SENSEX LIVE MONITOR - VISUAL OPTION CHAIN")
 print("="*70)
 
 def get_expiries(instrument_key):
@@ -149,7 +149,7 @@ def split_30min_to_5min(candle_30min):
             current_close = close_price
         
         candles_5min.append([
-            ts, current_open, current_high, current_low, 
+            ts, current_open, current_high, current_low,
             current_close, vol_per_candle, oi
         ])
     
@@ -163,7 +163,7 @@ def get_live_candles(instrument_key, symbol):
     historical_5min = []
     today_5min = []
     
-    # STEP 1: Historical 30min data (last 10 days)
+    # Historical 30min data
     print(f"  🔍 Fetching historical 30min data...")
     try:
         to_date = datetime.now(IST)
@@ -179,7 +179,7 @@ def get_live_candles(instrument_key, symbol):
             if data.get('status') == 'success':
                 hist_candles_30min = data.get('data', {}).get('candles', [])
                 if hist_candles_30min:
-                    print(f"  ✅ Historical: {len(hist_candles_30min)} x 30min candles")
+                    print(f"  ✅ Historical: {len(hist_candles_30min)} x 30min")
                     
                     today_date = datetime.now(IST).date()
                     for c in hist_candles_30min:
@@ -191,12 +191,12 @@ def get_live_candles(instrument_key, symbol):
                         except:
                             pass
                     
-                    print(f"  📊 Historical 5min candles: {len(historical_5min)}")
+                    print(f"  📊 Historical 5min: {len(historical_5min)}")
     except Exception as e:
         print(f"  ⚠️ Historical error: {e}")
     
-    # STEP 2: Today's LIVE 1min data
-    print(f"  🔍 Fetching TODAY'S LIVE 1min data...")
+    # Today's LIVE 1min data
+    print(f"  🔍 Fetching TODAY'S LIVE 1min...")
     try:
         url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
         resp = requests.get(url, headers=headers, timeout=20)
@@ -206,7 +206,7 @@ def get_live_candles(instrument_key, symbol):
             if data.get('status') == 'success':
                 today_candles_1min = data.get('data', {}).get('candles', [])
                 if today_candles_1min:
-                    print(f"  ✅ TODAY LIVE: {len(today_candles_1min)} x 1min candles")
+                    print(f"  ✅ TODAY: {len(today_candles_1min)} x 1min")
                     
                     today_candles_1min = sorted(today_candles_1min,
                                                key=lambda x: datetime.fromisoformat(x[0].replace('Z', '+00:00')))
@@ -231,26 +231,24 @@ def get_live_candles(instrument_key, symbol):
                         
                         i += 5
                     
-                    print(f"  ✅ Today's 5min candles: {len(today_5min)}")
+                    print(f"  ✅ Today 5min: {len(today_5min)}")
     except Exception as e:
         print(f"  ⚠️ Today error: {e}")
     
-    # STEP 3: Combine
+    # Combine
     all_candles = historical_5min + today_5min
     
     if all_candles:
         all_candles = sorted(all_candles,
                             key=lambda x: datetime.fromisoformat(x[0].replace('Z', '+00:00')))
-        print(f"  ✅ TOTAL: {len(all_candles)} x 5min (Hist: {len(historical_5min)} + Today: {len(today_5min)})")
+        print(f"  ✅ TOTAL: {len(all_candles)} x 5min")
         return all_candles, len(historical_5min)
     
-    print(f"  ❌ {symbol}: No data")
     return [], 0
 
-def create_premium_chart(candles, symbol, spot_price, hist_count):
-    """Create enhanced chart with historical/live distinction"""
+def create_wide_chart(candles, symbol, spot_price, hist_count):
+    """Create WIDER chart with clearer historical data"""
     if not candles or len(candles) < 10:
-        print(f"  ⚠️ Insufficient candles: {len(candles) if candles else 0}")
         return None
     
     data = []
@@ -279,11 +277,10 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
             continue
     
     if len(data) < 10:
-        print(f"  ⚠️ After filtering: {len(data)} candles")
         return None
     
-    # Create figure
-    fig, axes = plt.subplots(2, 1, figsize=(22, 13),
+    # WIDER figure - 28 inches wide!
+    fig, axes = plt.subplots(2, 1, figsize=(28, 13),
                              gridspec_kw={'height_ratios': [4, 1]},
                              facecolor='#0e1217')
     
@@ -291,10 +288,9 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     ax1.set_facecolor('#0e1217')
     ax2.set_facecolor('#0e1217')
     
-    # Calculate historical cutoff
     today_start = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
     
-    # Plot candlesticks with historical/live distinction
+    # Plot candlesticks - BRIGHTER historical!
     for idx in range(len(data)):
         row = data[idx]
         x = idx
@@ -302,13 +298,13 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
         is_bullish = row['close'] >= row['open']
         is_today = row['timestamp'] >= today_start
         
-        # Different opacity for historical vs today
-        alpha = 1.0 if is_today else 0.6
+        # INCREASED alpha for historical: 0.85 (was 0.6)
+        alpha = 1.0 if is_today else 0.85
         body_color = '#26a69a' if is_bullish else '#ef5350'
         
-        # Wick
+        # Thicker wicks
         ax1.plot([x, x], [row['low'], row['high']],
-                color=body_color, linewidth=1.3, solid_capstyle='round',
+                color=body_color, linewidth=1.5, solid_capstyle='round',
                 alpha=alpha, zorder=2)
         
         # Body
@@ -316,15 +312,15 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
         body_bottom = min(row['open'], row['close'])
         
         if body_height > 0.001:
-            rect = Rectangle((x - 0.35, body_bottom), 0.7, body_height,
+            rect = Rectangle((x - 0.4, body_bottom), 0.8, body_height,
                            facecolor=body_color, edgecolor=body_color,
                            linewidth=0, alpha=alpha, zorder=3)
             ax1.add_patch(rect)
         else:
-            ax1.plot([x - 0.35, x + 0.35], [row['open'], row['open']],
-                    color=body_color, linewidth=1.5, alpha=alpha, zorder=3)
+            ax1.plot([x - 0.4, x + 0.4], [row['open'], row['open']],
+                    color=body_color, linewidth=1.8, alpha=alpha, zorder=3)
     
-    # Mark today's start with vertical line
+    # TODAY marker
     today_idx = None
     for i, d in enumerate(data):
         if d['timestamp'] >= today_start:
@@ -333,73 +329,72 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     
     if today_idx:
         ax1.axvline(x=today_idx, color='#ffa726', linestyle='--',
-                   linewidth=2, alpha=0.5, zorder=1)
+                   linewidth=2.5, alpha=0.7, zorder=1)
         ax2.axvline(x=today_idx, color='#ffa726', linestyle='--',
-                   linewidth=2, alpha=0.5, zorder=1)
+                   linewidth=2.5, alpha=0.7, zorder=1)
         
-        # Add "TODAY" label
-        y_pos = ax1.get_ylim()[1] * 0.98
+        y_pos = ax1.get_ylim()[1] * 0.97
         ax1.text(today_idx, y_pos, ' TODAY ', 
-                color='#ffa726', fontsize=10, fontweight='bold',
-                bbox=dict(boxstyle='round,pad=0.4', facecolor='#0e1217',
-                         edgecolor='#ffa726', linewidth=1.5),
+                color='#ffa726', fontsize=11, fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='#0e1217',
+                         edgecolor='#ffa726', linewidth=2),
                 verticalalignment='top', zorder=5)
     
-    # Current price line
+    # Current price
     ax1.axhline(y=spot_price, color='#2962ff', linestyle='--',
-               linewidth=2.5, alpha=0.9, zorder=4)
+               linewidth=2.5, alpha=0.95, zorder=4)
     
     # Price label
     ax1_right = ax1.twinx()
     ax1_right.set_ylim(ax1.get_ylim())
     ax1_right.set_yticks([spot_price])
     ax1_right.set_yticklabels([f'₹{spot_price:.2f}'],
-                              fontsize=13, fontweight='700', color='#2962ff',
-                              bbox=dict(boxstyle='round,pad=0.6',
-                                      facecolor='#2962ff', alpha=0.3))
-    ax1_right.tick_params(colors='#2962ff', length=0, pad=10)
+                              fontsize=14, fontweight='700', color='#2962ff',
+                              bbox=dict(boxstyle='round,pad=0.7',
+                                      facecolor='#2962ff', alpha=0.35))
+    ax1_right.tick_params(colors='#2962ff', length=0, pad=12)
     ax1_right.set_facecolor('#0e1217')
     
     # Styling
-    ax1.set_ylabel('Price (₹)', color='#b2b5be', fontsize=13, fontweight='600')
-    ax1.tick_params(axis='y', colors='#787b86', labelsize=11, width=0)
-    ax1.tick_params(axis='x', colors='#787b86', labelsize=11, width=0)
-    ax1.grid(True, alpha=0.12, color='#363a45', linestyle='-', linewidth=0.8)
+    ax1.set_ylabel('Price (₹)', color='#b2b5be', fontsize=14, fontweight='600')
+    ax1.tick_params(axis='y', colors='#8a8d96', labelsize=11, width=0)
+    ax1.tick_params(axis='x', colors='#8a8d96', labelsize=11, width=0)
+    ax1.grid(True, alpha=0.15, color='#363a45', linestyle='-', linewidth=0.9)
     ax1.set_axisbelow(True)
     
     # Title
     now_str = datetime.now(IST).strftime('%d %b %Y • %I:%M:%S %p IST')
     title = f'{symbol}  •  5 Min Chart (LIVE)  •  {now_str}'
-    ax1.set_title(title, color='#d1d4dc', fontsize=17, fontweight='700',
-                 pad=25, loc='left')
+    ax1.set_title(title, color='#e1e4ec', fontsize=18, fontweight='700',
+                 pad=28, loc='left')
     
-    # Volume bars
+    # Volume bars - BRIGHTER historical
     volumes = [d['volume'] for d in data]
     colors_vol = []
     for i in range(len(data)):
         is_bull = data[i]['close'] >= data[i]['open']
         is_today = data[i]['timestamp'] >= today_start
         color = '#26a69a' if is_bull else '#ef5350'
-        alpha_vol = 0.9 if is_today else 0.5
+        alpha_vol = 0.95 if is_today else 0.7  # Increased from 0.5
         colors_vol.append((matplotlib.colors.to_rgba(color, alpha=alpha_vol)))
     
     ax2.bar(range(len(volumes)), volumes, color=colors_vol,
-           width=0.7, edgecolor='none')
+           width=0.8, edgecolor='none')
     
-    ax2.set_ylabel('Volume', color='#b2b5be', fontsize=13, fontweight='600')
-    ax2.tick_params(axis='y', colors='#787b86', labelsize=11, width=0)
-    ax2.tick_params(axis='x', colors='#787b86', labelsize=11, width=0)
-    ax2.grid(True, alpha=0.12, color='#363a45', linestyle='-', linewidth=0.8)
+    ax2.set_ylabel('Volume', color='#b2b5be', fontsize=14, fontweight='600')
+    ax2.tick_params(axis='y', colors='#8a8d96', labelsize=11, width=0)
+    ax2.tick_params(axis='x', colors='#8a8d96', labelsize=11, width=0)
+    ax2.grid(True, alpha=0.15, color='#363a45', linestyle='-', linewidth=0.9)
     ax2.set_axisbelow(True)
     
     # X-axis labels
-    step = max(1, len(data) // 12)
+    step = max(1, len(data) // 15)
     tick_positions = list(range(0, len(data), step))
     tick_labels = [data[i]['timestamp'].strftime('%d %b\n%H:%M') for i in tick_positions]
     
     for ax in [ax1, ax2]:
         ax.set_xticks(tick_positions)
-        ax.set_xticklabels(tick_labels, color='#787b86', fontsize=10)
+        ax.set_xticklabels(tick_labels, color='#8a8d96', fontsize=10)
         ax.set_xlim(-1, len(data))
         
         for spine in ax.spines.values():
@@ -411,45 +406,79 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     ax2.spines['top'].set_visible(False)
     
     ax2.set_xlabel('Date & Time (IST)', color='#b2b5be',
-                  fontsize=13, fontweight='600', labelpad=12)
+                  fontsize=14, fontweight='600', labelpad=14)
     
-    plt.tight_layout(pad=2)
-    plt.subplots_adjust(hspace=0.08)
+    plt.tight_layout(pad=2.5)
+    plt.subplots_adjust(hspace=0.1)
     
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=160, facecolor='#0e1217',
+    plt.savefig(buf, format='png', dpi=170, facecolor='#0e1217',
                edgecolor='none', bbox_inches='tight')
     buf.seek(0)
     plt.close(fig)
     
     return buf
 
-def format_option_chain_message(symbol, spot, expiry, strikes):
-    """Format ENHANCED option chain with Volume, OI, OI Changes, Greeks"""
+def create_option_chain_image(symbol, spot, expiry, strikes):
+    """Create VISUAL option chain image - Upstox style"""
     if not strikes:
         return None
     
     atm_index = min(range(len(strikes)),
                    key=lambda i: abs(strikes[i].get('strike_price', 0) - spot))
-    start = max(0, atm_index - 8)
-    end = min(len(strikes), atm_index + 9)
+    start = max(0, atm_index - 10)
+    end = min(len(strikes), atm_index + 11)
     selected = strikes[start:end]
     
-    msg = f"📊 *{symbol} - OPTION CHAIN*\n\n"
-    msg += f"💰 Spot: ₹{spot:,.2f}\n"
-    msg += f"📅 Expiry: {expiry}\n"
-    msg += f"🎯 ATM: ₹{strikes[atm_index].get('strike_price', 0):,.2f}\n\n"
+    # Create figure - WIDE format
+    fig = plt.figure(figsize=(20, 14), facecolor='#0a0e12')
     
-    # Part 1: LTP & Volume
-    msg += "```\n"
-    msg += "═══ CALLS ═══════════════════ PUTS ═══\n"
-    msg += "Vol   LTP  Strike  LTP   Vol\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    # Main title
+    fig.suptitle(f'{symbol} - OPTION CHAIN', 
+                fontsize=22, fontweight='bold', color='#e8eaf0', y=0.98)
+    
+    # Spot info
+    spot_text = f'Spot: ₹{spot:,.2f}  |  Expiry: {expiry}  |  ATM: ₹{strikes[atm_index].get("strike_price", 0):,.2f}'
+    fig.text(0.5, 0.94, spot_text, ha='center', fontsize=14, color='#b0b3ba')
+    
+    # Create 3 subplots
+    gs = fig.add_gridspec(3, 1, height_ratios=[1.2, 1.2, 1], hspace=0.35,
+                         left=0.05, right=0.95, top=0.90, bottom=0.05)
+    
+    ax1 = fig.add_subplot(gs[0])  # Price & Volume
+    ax2 = fig.add_subplot(gs[1])  # OI & Changes
+    ax3 = fig.add_subplot(gs[2])  # Greeks
+    
+    for ax in [ax1, ax2, ax3]:
+        ax.set_facecolor('#0a0e12')
+        ax.axis('off')
+    
+    # === PANEL 1: PRICE & VOLUME ===
+    ax1.text(0.5, 0.95, 'PRICE & VOLUME', ha='center', fontsize=16,
+            fontweight='bold', color='#ffa726', transform=ax1.transAxes)
+    
+    # Headers
+    header_y = 0.85
+    ax1.text(0.08, header_y, 'CE Vol', ha='center', fontsize=11, 
+            fontweight='bold', color='#26a69a', transform=ax1.transAxes)
+    ax1.text(0.20, header_y, 'CE LTP', ha='center', fontsize=11,
+            fontweight='bold', color='#26a69a', transform=ax1.transAxes)
+    ax1.text(0.50, header_y, 'STRIKE', ha='center', fontsize=12,
+            fontweight='bold', color='#ffa726', transform=ax1.transAxes)
+    ax1.text(0.80, header_y, 'PE LTP', ha='center', fontsize=11,
+            fontweight='bold', color='#ef5350', transform=ax1.transAxes)
+    ax1.text(0.92, header_y, 'PE Vol', ha='center', fontsize=11,
+            fontweight='bold', color='#ef5350', transform=ax1.transAxes)
+    
+    # Data rows
+    y_start = 0.75
+    y_step = 0.75 / (len(selected) + 2)
     
     total_ce_vol = total_pe_vol = 0
     total_ce_oi = total_pe_oi = 0
     
-    for s in selected:
+    for i, s in enumerate(selected):
+        y_pos = y_start - (i * y_step)
         strike_price = s.get('strike_price', 0)
         
         call_data = s.get('call_options', {}).get('market_data', {})
@@ -467,88 +496,121 @@ def format_option_chain_message(symbol, spot, expiry, strikes):
         total_ce_oi += ce_oi
         total_pe_oi += pe_oi
         
-        # Format with K/L suffix
-        ce_vol_str = f"{ce_vol/1000:.0f}K" if ce_vol >= 1000 else f"{ce_vol:.0f}"
-        pe_vol_str = f"{pe_vol/1000:.0f}K" if pe_vol >= 1000 else f"{pe_vol:.0f}"
-        
         is_atm = (strike_price == strikes[atm_index].get('strike_price', 0))
-        marker = "►" if is_atm else " "
         
-        msg += f"{ce_vol_str:>5} {ce_ltp:6.1f} {marker}{strike_price:6.0f} {pe_ltp:6.1f} {pe_vol_str:>5}\n"
+        # ATM highlight
+        if is_atm:
+            rect = Rectangle((0.0, y_pos - y_step/3), 1.0, y_step*1.1,
+                           facecolor='#ffa726', alpha=0.15, transform=ax2.transAxes)
+            ax2.add_patch(rect)
+        
+        # CE OI
+        ce_oi_str = f"{ce_oi/1000:.0f}K" if ce_oi >= 1000 else f"{ce_oi:.0f}"
+        ax2.text(0.08, y_pos, ce_oi_str, ha='center', fontsize=10,
+                color='#26a69a', transform=ax2.transAxes, fontweight='600')
+        
+        # CE OI Change
+        ce_chg_str = f"{ce_oi_chg/1000:+.1f}K" if abs(ce_oi_chg) >= 1000 else f"{ce_oi_chg:+.0f}"
+        chg_color = '#26a69a' if ce_oi_chg > 0 else '#ef5350' if ce_oi_chg < 0 else '#787b86'
+        ax2.text(0.20, y_pos, ce_chg_str, ha='center', fontsize=9,
+                color=chg_color, transform=ax2.transAxes, fontweight='600')
+        
+        # STRIKE
+        strike_color = '#ffa726' if is_atm else '#e8eaf0'
+        strike_weight = '800' if is_atm else '600'
+        ax2.text(0.50, y_pos, f"{strike_price:.0f}", ha='center', fontsize=11,
+                color=strike_color, transform=ax2.transAxes, fontweight=strike_weight)
+        
+        # PE OI Change
+        pe_chg_str = f"{pe_oi_chg/1000:+.1f}K" if abs(pe_oi_chg) >= 1000 else f"{pe_oi_chg:+.0f}"
+        chg_color = '#26a69a' if pe_oi_chg > 0 else '#ef5350' if pe_oi_chg < 0 else '#787b86'
+        ax2.text(0.80, y_pos, pe_chg_str, ha='center', fontsize=9,
+                color=chg_color, transform=ax2.transAxes, fontweight='600')
+        
+        # PE OI
+        pe_oi_str = f"{pe_oi/1000:.0f}K" if pe_oi >= 1000 else f"{pe_oi:.0f}"
+        ax2.text(0.92, y_pos, pe_oi_str, ha='center', fontsize=10,
+                color='#ef5350', transform=ax2.transAxes, fontweight='600')
     
-    msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"TOTAL VOL: {total_ce_vol/1000:.0f}K        {total_pe_vol/1000:.0f}K\n"
-    msg += "```\n\n"
+    # Total OI
+    ax2.text(0.08, total_y, f"{total_ce_oi/1000:.0f}K", ha='center', fontsize=11,
+            color='#26a69a', transform=ax2.transAxes, fontweight='bold')
+    ax2.text(0.15, total_y, 'TOTAL', ha='center', fontsize=10,
+            color='#b0b3ba', transform=ax2.transAxes)
+    ax2.text(0.92, total_y, f"{total_pe_oi/1000:.0f}K", ha='center', fontsize=11,
+            color='#ef5350', transform=ax2.transAxes, fontweight='bold')
     
-    # Part 2: OI & OI Change
-    msg += "```\n"
-    msg += "═══ OPEN INTEREST & CHANGES ═══\n"
-    msg += "CE-OI ΔOI Strike ΔOI  PE-OI\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    # PCR
+    pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
+    ax2.text(0.50, total_y, f"PCR: {pcr:.3f}", ha='center', fontsize=12,
+            color='#ffa726', transform=ax2.transAxes, fontweight='bold')
     
-    for s in selected:
-        strike_price = s.get('strike_price', 0)
-        
-        call_data = s.get('call_options', {}).get('market_data', {})
-        ce_oi = call_data.get('oi', 0)
-        ce_oi_change = call_data.get('oi_day_high', 0) - call_data.get('oi_day_low', 0)
-        
-        put_data = s.get('put_options', {}).get('market_data', {})
-        pe_oi = put_data.get('oi', 0)
-        pe_oi_change = put_data.get('oi_day_high', 0) - put_data.get('oi_day_low', 0)
-        
-        ce_oi_str = f"{ce_oi/1000:.0f}K"
-        pe_oi_str = f"{pe_oi/1000:.0f}K"
-        ce_chg_str = f"{ce_oi_change/1000:+.0f}K" if abs(ce_oi_change) >= 1000 else f"{ce_oi_change:+.0f}"
-        pe_chg_str = f"{pe_oi_change/1000:+.0f}K" if abs(pe_oi_change) >= 1000 else f"{pe_oi_change:+.0f}"
-        
-        is_atm = (strike_price == strikes[atm_index].get('strike_price', 0))
-        marker = "►" if is_atm else " "
-        
-        msg += f"{ce_oi_str:>5} {ce_chg_str:>5} {marker}{strike_price:6.0f} {pe_chg_str:>5} {pe_oi_str:>5}\n"
+    # === PANEL 3: GREEKS (ATM Strike) ===
+    ax3.text(0.5, 0.95, f'OPTION GREEKS - ATM Strike ({strikes[atm_index].get("strike_price", 0):.0f})',
+            ha='center', fontsize=16, fontweight='bold', color='#ffa726', transform=ax3.transAxes)
     
-    msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"TOTAL OI: {total_ce_oi/1000:.0f}K        {total_pe_oi/1000:.0f}K\n"
-    msg += "```\n\n"
-    
-    # Part 3: Greeks (ATM Strike)
     atm_strike = strikes[atm_index]
     call_greeks = atm_strike.get('call_options', {}).get('greeks', {})
     put_greeks = atm_strike.get('put_options', {}).get('greeks', {})
     
     if call_greeks or put_greeks:
-        msg += "```\n"
-        msg += f"═══ GREEKS (ATM: {atm_strike.get('strike_price', 0):.0f}) ═══\n"
-        msg += "         CALL    PUT\n"
-        msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        # Headers
+        greek_header_y = 0.75
+        ax3.text(0.35, greek_header_y, 'CALL', ha='center', fontsize=13,
+                fontweight='bold', color='#26a69a', transform=ax3.transAxes)
+        ax3.text(0.50, greek_header_y, 'GREEK', ha='center', fontsize=13,
+                fontweight='bold', color='#ffa726', transform=ax3.transAxes)
+        ax3.text(0.65, greek_header_y, 'PUT', ha='center', fontsize=13,
+                fontweight='bold', color='#ef5350', transform=ax3.transAxes)
         
-        ce_delta = call_greeks.get('delta', 0)
-        pe_delta = put_greeks.get('delta', 0)
-        msg += f"Delta:  {ce_delta:6.3f} {pe_delta:7.3f}\n"
+        greeks_data = [
+            ('Delta', call_greeks.get('delta', 0), put_greeks.get('delta', 0), '.4f'),
+            ('Gamma', call_greeks.get('gamma', 0), put_greeks.get('gamma', 0), '.5f'),
+            ('Theta', call_greeks.get('theta', 0), put_greeks.get('theta', 0), '.2f'),
+            ('Vega', call_greeks.get('vega', 0), put_greeks.get('vega', 0), '.2f'),
+            ('IV', call_greeks.get('iv', 0), put_greeks.get('iv', 0), '.2f')
+        ]
         
-        ce_gamma = call_greeks.get('gamma', 0)
-        pe_gamma = put_greeks.get('gamma', 0)
-        msg += f"Gamma:  {ce_gamma:6.4f} {pe_gamma:7.4f}\n"
+        y_greek = 0.60
+        y_greek_step = 0.12
         
-        ce_theta = call_greeks.get('theta', 0)
-        pe_theta = put_greeks.get('theta', 0)
-        msg += f"Theta:  {ce_theta:6.2f} {pe_theta:7.2f}\n"
-        
-        ce_vega = call_greeks.get('vega', 0)
-        pe_vega = put_greeks.get('vega', 0)
-        msg += f"Vega:   {ce_vega:6.2f} {pe_vega:7.2f}\n"
-        
-        ce_iv = call_greeks.get('iv', 0)
-        pe_iv = put_greeks.get('iv', 0)
-        msg += f"IV:     {ce_iv:6.1f}% {pe_iv:6.1f}%\n"
-        msg += "```\n\n"
+        for name, ce_val, pe_val, fmt in greeks_data:
+            # Greek name
+            ax3.text(0.50, y_greek, name, ha='center', fontsize=12,
+                    color='#e8eaf0', transform=ax3.transAxes, fontweight='600')
+            
+            # CE value
+            if name == 'IV':
+                ce_str = f"{ce_val:{fmt}}%"
+            else:
+                ce_str = f"{ce_val:{fmt}}"
+            ax3.text(0.35, y_greek, ce_str, ha='center', fontsize=11,
+                    color='#26a69a', transform=ax3.transAxes, fontweight='700')
+            
+            # PE value
+            if name == 'IV':
+                pe_str = f"{pe_val:{fmt}}%"
+            else:
+                pe_str = f"{pe_val:{fmt}}"
+            ax3.text(0.65, y_greek, pe_str, ha='center', fontsize=11,
+                    color='#ef5350', transform=ax3.transAxes, fontweight='700')
+            
+            y_greek -= y_greek_step
+    else:
+        ax3.text(0.5, 0.5, 'Greeks data not available', ha='center', fontsize=12,
+                color='#787b86', transform=ax3.transAxes, style='italic')
     
-    # Summary
-    pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
-    msg += f"📊 *PCR (OI):* {pcr:.3f}\n"
-    msg += f"⏰ {datetime.now(IST).strftime('%I:%M:%S %p IST')}\n"
+    # Timestamp
+    now_str = datetime.now(IST).strftime('%I:%M:%S %p IST • %d %b %Y')
+    fig.text(0.5, 0.015, now_str, ha='center', fontsize=11, color='#787b86')
     
-    return msg
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, facecolor='#0a0e12',
+               edgecolor='none', bbox_inches='tight')
+    buf.seek(0)
+    plt.close(fig)
+    
+    return buf
 
 async def send_telegram_text(msg):
     try:
@@ -593,24 +655,28 @@ async def process_index(index_key, index_name, expiry_day, expiry_type):
         
         print(f"✅ Strikes: {len(strikes)}")
         
-        # Send ENHANCED option chain
-        msg = format_option_chain_message(index_name, spot, expiry, strikes)
-        if msg:
-            await send_telegram_text(msg)
-            print("📤 Enhanced option chain sent (Vol, OI, Greeks)")
+        # Send VISUAL option chain image
+        print("📊 Creating option chain image...")
+        oc_image = create_option_chain_image(index_name, spot, expiry, strikes)
+        if oc_image:
+            caption = f"📊 *{index_name}* Option Chain\n💰 ₹{spot:.2f} | 📅 {expiry}"
+            await send_telegram_photo(oc_image, caption)
+            print("📤 Option chain image sent")
         
-        # Send LIVE chart with historical distinction
-        print("📊 Fetching candles (Historical 30min + Today 1min)...")
+        await asyncio.sleep(2)
+        
+        # Send WIDE chart
+        print("📈 Fetching candles...")
         candles, hist_count = get_live_candles(index_key, index_name)
         
         if candles and len(candles) >= 10:
-            print("📈 Creating enhanced chart...")
-            chart = create_premium_chart(candles, index_name, spot, hist_count)
+            print("📈 Creating wide chart...")
+            chart = create_wide_chart(candles, index_name, spot, hist_count)
             
             if chart:
-                caption = f"📈 *{index_name}* ({expiry_type})\n💰 ₹{spot:.2f} | 📅 {expiry}\n🔸 Historical + Today's LIVE data"
+                caption = f"📈 *{index_name}* ({expiry_type})\n💰 ₹{spot:.2f} | 📅 {expiry}"
                 await send_telegram_photo(chart, caption)
-                print("📤 Chart sent (Historical + LIVE)!")
+                print("📤 Wide chart sent!")
                 return True
         else:
             print("⚠️ Insufficient candle data")
@@ -642,18 +708,21 @@ async def process_stock(key, symbol, idx, total):
         
         print(f"  ✅ Spot: ₹{spot:.2f} | Strikes: {len(strikes)}")
         
-        # Send ENHANCED option chain
-        msg = format_option_chain_message(symbol, spot, expiry, strikes)
-        if msg:
-            await send_telegram_text(msg)
-            print("  📤 Enhanced chain sent")
+        # Send option chain image
+        oc_image = create_option_chain_image(symbol, spot, expiry, strikes)
+        if oc_image:
+            caption = f"📊 *{symbol}* Option Chain\n💰 ₹{spot:.2f}"
+            await send_telegram_photo(oc_image, caption)
+            print("  📤 Option chain sent")
         
-        # Send LIVE chart
+        await asyncio.sleep(2)
+        
+        # Send chart
         candles, hist_count = get_live_candles(key, symbol)
         if candles and len(candles) >= 10:
-            chart = create_premium_chart(candles, symbol, spot, hist_count)
+            chart = create_wide_chart(candles, symbol, spot, hist_count)
             if chart:
-                caption = f"📈 *{symbol}* (Monthly)\n💰 ₹{spot:.2f}\n🔸 Hist + Today"
+                caption = f"📈 *{symbol}* (Monthly)\n💰 ₹{spot:.2f}"
                 await send_telegram_photo(chart, caption)
                 print("  📤 Chart sent")
         
@@ -669,7 +738,7 @@ async def fetch_all():
     print(f"🚀 RUN: {datetime.now(IST).strftime('%I:%M:%S %p IST')}")
     print("="*60)
     
-    header = f"🚀 *MARKET MONITOR - ENHANCED*\n⏰ {datetime.now(IST).strftime('%I:%M %p')}\n\n_Processing with Vol, OI, Greeks..._"
+    header = f"🚀 *MARKET MONITOR*\n⏰ {datetime.now(IST).strftime('%I:%M %p')}\n\n_Processing with visual option chains..._"
     await send_telegram_text(header)
     
     # NIFTY (Tuesday Weekly)
@@ -696,7 +765,7 @@ async def fetch_all():
     summary += f"NIFTY: {'✅' if nifty_ok else '❌'}\n"
     summary += f"SENSEX: {'✅' if sensex_ok else '❌'}\n"
     summary += f"Stocks: {success}/{total}\n\n"
-    summary += f"📊 Enhanced with Volume, OI, Greeks"
+    summary += f"📊 Wide charts + Visual option chains"
     await send_telegram_text(summary)
     
     print(f"\n✅ DONE: NIFTY={nifty_ok} | SENSEX={sensex_ok} | Stocks={success}/{total}")
@@ -724,19 +793,17 @@ async def monitoring_loop():
 async def main():
     """Entry point"""
     print("\n" + "="*70)
-    print("NIFTY + SENSEX + STOCKS MONITOR - ENHANCED VERSION")
+    print("NIFTY + SENSEX + STOCKS - VISUAL OPTION CHAIN MONITOR")
     print("="*70)
     print("📊 NIFTY: Tuesday (Weekly)")
     print("📊 SENSEX: Thursday (Weekly)")
     print("📈 Stocks: Thursday (Monthly)")
     print("="*70)
-    print("✨ ENHANCEMENTS:")
-    print("  • Clear historical vs live data separation")
-    print("  • Historical 30min → 5min split")
-    print("  • Today's 1min → 5min aggregation")
-    print("  • Option Volume + OI + OI Changes")
-    print("  • Greeks (Delta, Gamma, Theta, Vega, IV)")
-    print("  • Premium TradingView-style charts")
+    print("✨ FEATURES:")
+    print("  • WIDE charts (28 inches) - clear historical data")
+    print("  • Historical data: 85% opacity (bright & visible)")
+    print("  • Visual option chain images (Upstox-style)")
+    print("  • 3 panels: Price/Vol, OI/Changes, Greeks")
     print("  • Updates every 5 minutes")
     print("="*70 + "\n")
     
@@ -744,3 +811,74 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+        bg_alpha = 0.3 if is_atm else 0
+        
+        # ATM highlight
+        if is_atm:
+            rect = Rectangle((0.0, y_pos - y_step/3), 1.0, y_step*1.1,
+                           facecolor='#ffa726', alpha=0.15, transform=ax1.transAxes)
+            ax1.add_patch(rect)
+        
+        # CE Volume
+        ce_vol_str = f"{ce_vol/1000:.1f}K" if ce_vol >= 1000 else f"{ce_vol:.0f}"
+        ax1.text(0.08, y_pos, ce_vol_str, ha='center', fontsize=10,
+                color='#26a69a', transform=ax1.transAxes, fontweight='600')
+        
+        # CE LTP
+        ax1.text(0.20, y_pos, f"{ce_ltp:.2f}", ha='center', fontsize=10,
+                color='#26a69a', transform=ax1.transAxes, fontweight='700')
+        
+        # STRIKE
+        strike_color = '#ffa726' if is_atm else '#e8eaf0'
+        strike_weight = '800' if is_atm else '600'
+        ax1.text(0.50, y_pos, f"{strike_price:.0f}", ha='center', fontsize=11,
+                color=strike_color, transform=ax1.transAxes, fontweight=strike_weight)
+        
+        # PE LTP
+        ax1.text(0.80, y_pos, f"{pe_ltp:.2f}", ha='center', fontsize=10,
+                color='#ef5350', transform=ax1.transAxes, fontweight='700')
+        
+        # PE Volume
+        pe_vol_str = f"{pe_vol/1000:.1f}K" if pe_vol >= 1000 else f"{pe_vol:.0f}"
+        ax1.text(0.92, y_pos, pe_vol_str, ha='center', fontsize=10,
+                color='#ef5350', transform=ax1.transAxes, fontweight='600')
+    
+    # Total Volume
+    total_y = y_start - (len(selected) + 1) * y_step
+    ax1.text(0.08, total_y, f"{total_ce_vol/1000:.0f}K", ha='center', fontsize=11,
+            color='#26a69a', transform=ax1.transAxes, fontweight='bold')
+    ax1.text(0.15, total_y, 'TOTAL', ha='center', fontsize=10,
+            color='#b0b3ba', transform=ax1.transAxes)
+    ax1.text(0.92, total_y, f"{total_pe_vol/1000:.0f}K", ha='center', fontsize=11,
+            color='#ef5350', transform=ax1.transAxes, fontweight='bold')
+    
+    # === PANEL 2: OI & CHANGES ===
+    ax2.text(0.5, 0.95, 'OPEN INTEREST & CHANGES', ha='center', fontsize=16,
+            fontweight='bold', color='#ffa726', transform=ax2.transAxes)
+    
+    # Headers
+    ax2.text(0.08, header_y, 'CE OI', ha='center', fontsize=11,
+            fontweight='bold', color='#26a69a', transform=ax2.transAxes)
+    ax2.text(0.20, header_y, 'ΔOI', ha='center', fontsize=11,
+            fontweight='bold', color='#26a69a', transform=ax2.transAxes)
+    ax2.text(0.50, header_y, 'STRIKE', ha='center', fontsize=12,
+            fontweight='bold', color='#ffa726', transform=ax2.transAxes)
+    ax2.text(0.80, header_y, 'ΔOI', ha='center', fontsize=11,
+            fontweight='bold', color='#ef5350', transform=ax2.transAxes)
+    ax2.text(0.92, header_y, 'PE OI', ha='center', fontsize=11,
+            fontweight='bold', color='#ef5350', transform=ax2.transAxes)
+    
+    # Data rows
+    for i, s in enumerate(selected):
+        y_pos = y_start - (i * y_step)
+        strike_price = s.get('strike_price', 0)
+        
+        call_data = s.get('call_options', {}).get('market_data', {})
+        ce_oi = call_data.get('oi', 0)
+        ce_oi_chg = call_data.get('oi_day_high', 0) - call_data.get('oi_day_low', 0)
+        
+        put_data = s.get('put_options', {}).get('market_data', {})
+        pe_oi = put_data.get('oi', 0)
+        pe_oi_chg = put_data.get('oi_day_high', 0) - put_data.get('oi_day_low', 0)
+        
+        is_atm = (strike_price == strikes[atm_index].get('strike_price', 0))
