@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """
-COMPLETE MARKET MONITOR - ENHANCED VERSION
+COMPLETE MARKET MONITOR - v3 (5-Day Historical Charts)
 - ALL NIFTY 50 Stocks + POONAWALLA
 - NIFTY 50, BANK NIFTY, FIN NIFTY, MIDCAP NIFTY
-- 3:30 PM Daily Summary
-- Full historical + live data
-- Enhanced option chain with OI, Volume, and GREEKS (Delta, Theta)
+- Last 5 days historical data + live data in charts
+- Enhanced option chain with OI, Volume, and GREEKS
 """
 
 import os
 import asyncio
 import requests
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import pytz
-import time
+import time as time_sleep
 from telegram import Bot
 import matplotlib
 matplotlib.use('Agg')
@@ -40,9 +39,8 @@ INDICES = {
 
 # COMPLETE NIFTY 50 STOCKS + POONAWALLA (ALL 51)
 NIFTY50_STOCKS = {
-    "NSE_EQ|INE002A01018": "RELIANCE", "NSE_EQ|INE467B01029": "TATAMOTORS",
-    "NSE_EQ|INE040A01034": "HDFCBANK", "NSE_EQ|INE090A01021": "ICICIBANK",
-    "NSE_EQ|INE062A01020": "SBIN", "NSE_EQ|INE009A01021": "INFY", "NSE_EQ|INE854D01024": "TCS",
+    "NSE_EQ|INE002A01018": "RELIANCE", "NSE_EQ|INE467B01029": "TATAMOTORS", "NSE_EQ|INE040A01034": "HDFCBANK",
+    "NSE_EQ|INE090A01021": "ICICIBANK", "NSE_EQ|INE062A01020": "SBIN", "NSE_EQ|INE009A01021": "INFY", "NSE_EQ|INE854D01024": "TCS",
     "NSE_EQ|INE594E01019": "HINDUNILVR", "NSE_EQ|INE030A01027": "BHARTIARTL", "NSE_EQ|INE238A01034": "AXISBANK",
     "NSE_EQ|INE192A01025": "KOTAKBANK", "NSE_EQ|INE155A01022": "TATASTEEL", "NSE_EQ|INE047A01021": "HCLTECH",
     "NSE_EQ|INE742F01042": "ADANIENT", "NSE_EQ|INE012A01025": "WIPRO", "NSE_EQ|INE018A01030": "LT",
@@ -63,7 +61,7 @@ NIFTY50_STOCKS = {
 # Global tracking
 DAILY_STATS = {"total_alerts": 0, "indices_count": 0, "stocks_count": 0, "start_time": None}
 
-print("="*70); print("🚀 COMPLETE MARKET MONITOR - v2 (OI & GREEKS)"); print("="*70)
+print("="*70); print("🚀 COMPLETE MARKET MONITOR - v3 (5-Day Historical Charts)"); print("="*70)
 
 def get_expiries(instrument_key):
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
@@ -115,54 +113,111 @@ def get_spot_price(instrument_key):
                     ltp = quote_data[list(quote_data.keys())[0]].get('last_price', 0)
                     if ltp: return float(ltp)
             print(f"  ⚠️ Spot price attempt {attempt + 1} failed for {instrument_key.split('|')[1]}. Retrying...")
-            time.sleep(3)
+            time_sleep.sleep(3)
         except requests.exceptions.RequestException as e:
             print(f"  ⚠️ Spot price network error: {e}. Retrying...")
-            time.sleep(3)
+            time_sleep.sleep(3)
     print(f"  ❌ Failed to get spot price for {instrument_key.split('|')[1]} after 3 attempts.")
     return 0
-    
+
 def get_live_candles(instrument_key, symbol):
+    """
+    Fetches last 5 days of 5-min historical data and combines it with
+    today's live 1-min data (resampled to 5-min) for a complete chart.
+    """
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
-    all_candles = []
     
-    # Intraday data (1-minute aggregated to 5-minute)
+    # 1. Fetch Historical Data (Last 7 days, 5-minute interval)
+    historical_candles = []
+    try:
+        to_date = datetime.now(IST).strftime('%Y-%m-%d')
+        from_date = (datetime.now(IST) - timedelta(days=7)).strftime('%Y-%m-%d')
+        url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/5minute/{to_date}/{from_date}"
+        resp = requests.get(url, headers=headers, timeout=20)
+        if resp.status_code == 200 and resp.json().get('status') == 'success':
+            historical_candles = resp.json().get('data', {}).get('candles', [])
+    except Exception as e:
+        print(f"  ⚠️ Historical candle error: {e}")
+
+    # 2. Fetch Today's Live Data (1-minute interval)
+    intraday_candles_1min = []
     try:
         url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
         resp = requests.get(url, headers=headers, timeout=20)
         if resp.status_code == 200 and resp.json().get('status') == 'success':
-            candles_1min = resp.json().get('data', {}).get('candles', [])
-            if candles_1min:
-                df = pd.DataFrame(candles_1min, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                df.set_index('timestamp', inplace=True)
-                df = df.astype(float)
-                
-                df_5min = df.resample('5min').agg({
-                    'open': 'first', 'high': 'max', 'low': 'min',
-                    'close': 'last', 'volume': 'sum', 'oi': 'last'
-                }).dropna()
-                
-                for index, row in df_5min.iterrows():
-                    all_candles.append([index.isoformat(), row['open'], row['high'], row['low'], row['close'], row['volume'], row['oi']])
+            intraday_candles_1min = resp.json().get('data', {}).get('candles', [])
     except Exception as e:
         print(f"  ⚠️ Intraday candle error: {e}")
 
-    return sorted(all_candles, key=lambda x: x[0]), len(all_candles)
+    # 3. Combine and Process Data using Pandas
+    if not historical_candles and not intraday_candles_1min:
+        return [], 0
+
+    df_hist = pd.DataFrame(historical_candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+    df_intra = pd.DataFrame(intraday_candles_1min, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+    
+    final_df = pd.DataFrame()
+
+    if not df_hist.empty:
+        df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'])
+        df_hist.set_index('timestamp', inplace=True)
+        final_df = df_hist
+
+    if not df_intra.empty:
+        df_intra['timestamp'] = pd.to_datetime(df_intra['timestamp'])
+        df_intra.set_index('timestamp', inplace=True)
+        df_intra = df_intra.astype(float)
+        
+        df_resampled_intra = df_intra.resample('5min').agg({
+            'open': 'first', 'high': 'max', 'low': 'min',
+            'close': 'last', 'volume': 'sum', 'oi': 'last'
+        }).dropna()
+        
+        final_df = pd.concat([final_df, df_resampled_intra])
+
+    if final_df.empty: return [], 0
+    
+    final_df = final_df[~final_df.index.duplicated(keep='last')]
+    final_df.sort_index(inplace=True)
+    
+    today_date = datetime.now(IST).date()
+    hist_count = len(final_df[final_df.index.date < today_date])
+
+    final_candles_list = [[index.isoformat(), row['open'], row['high'], row['low'], row['close'], row['volume'], row['oi']] for index, row in final_df.iterrows()]
+        
+    return final_candles_list, hist_count
 
 def create_premium_chart(candles, symbol, spot_price, hist_count):
     if not candles or len(candles) < 2: return None
-    data = [{'timestamp': datetime.fromisoformat(c[0]).astimezone(IST), 'open': float(c[1]), 'high': float(c[2]), 'low': float(c[3]), 'close': float(c[4]), 'volume': int(c[5])} for c in candles]
     
+    data = []
+    for c in candles:
+        try:
+            ts = datetime.fromisoformat(c[0]).astimezone(IST)
+            # Filter out non-market hours
+            if time(9, 15) <= ts.time() <= time(15, 30):
+                data.append({'timestamp': ts, 'open': float(c[1]), 'high': float(c[2]), 'low': float(c[3]), 'close': float(c[4]), 'volume': int(c[5])})
+        except (ValueError, TypeError):
+            continue
+    
+    if not data: return None
+
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(28, 13), gridspec_kw={'height_ratios': [4, 1]}, facecolor='#0e1217')
     for ax in [ax1, ax2]: ax.set_facecolor('#0e1217')
     
     for i, row in enumerate(data):
+        is_today = i >= hist_count
+        alpha = 1.0 if is_today else 0.65
         color = '#26a69a' if row['close'] >= row['open'] else '#ef5350'
-        ax1.plot([i, i], [row['low'], row['high']], color=color, linewidth=1.3)
-        ax1.add_patch(Rectangle((i - 0.35, min(row['open'], row['close'])), 0.7, abs(row['close'] - row['open']), facecolor=color))
-        ax2.bar(i, row['volume'], width=0.7, color=color)
+        ax1.plot([i, i], [row['low'], row['high']], color=color, linewidth=1.3, alpha=alpha)
+        ax1.add_patch(Rectangle((i - 0.35, min(row['open'], row['close'])), 0.7, abs(row['close'] - row['open']), facecolor=color, alpha=alpha))
+        ax2.bar(i, row['volume'], width=0.7, color=color, alpha=alpha)
+
+    # Separator line between historical and live data
+    if hist_count > 0 and hist_count < len(data):
+        ax1.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', linewidth=1.5, alpha=0.7)
+        ax2.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', linewidth=1.5, alpha=0.7)
 
     ax1.axhline(y=spot_price, color='#2962ff', linestyle='--', linewidth=2.5, alpha=0.9, zorder=4)
     ax1_right = ax1.twinx(); ax1_right.set_ylim(ax1.get_ylim()); ax1_right.set_yticks([spot_price])
@@ -171,8 +226,18 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     ax1.set_title(f'{symbol} • 5 Min Chart (LIVE) • {datetime.now(IST).strftime("%d %b %Y • %I:%M:%S %p IST")}', color='#d1d4dc', fontsize=17, fontweight='700', loc='left')
     ax1.set_ylabel('Price (₹)', color='#b2b5be'); ax2.set_ylabel('Volume', color='#b2b5be')
     
-    tick_positions = range(0, len(data), max(1, len(data) // 12))
-    tick_labels = [data[i]['timestamp'].strftime('%H:%M') for i in tick_positions]
+    # Improved X-axis labels to show dates
+    tick_positions = list(range(0, len(data), max(1, len(data) // 10)))
+    tick_labels = []
+    last_date_label = None
+    for i in tick_positions:
+        current_date = data[i]['timestamp'].date()
+        if current_date != last_date_label:
+            tick_labels.append(data[i]['timestamp'].strftime('%d %b'))
+            last_date_label = current_date
+        else:
+            tick_labels.append(data[i]['timestamp'].strftime('%H:%M'))
+
     for ax in [ax1, ax2]:
         ax.grid(True, alpha=0.12, color='#363a45'); ax.tick_params(axis='y', colors='#787b86', labelsize=11)
         ax.set_xticks(tick_positions); ax.set_xticklabels(tick_labels, color='#787b86', fontsize=10)
@@ -204,32 +269,23 @@ def format_option_chain_message(symbol, spot, expiry, strikes):
     msg += "  Δ / Θ                 |        |                Δ / Θ   \n"
     msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     
-    total_ce_oi = total_pe_oi = 0
-    for s in strikes: # Calculate total OI from all strikes
-        total_ce_oi += s.get('call_options', {}).get('market_data', {}).get('oi', 0)
-        total_pe_oi += s.get('put_options', {}).get('market_data', {}).get('oi', 0)
+    total_ce_oi = sum(s.get('call_options', {}).get('market_data', {}).get('oi', 0) for s in strikes)
+    total_pe_oi = sum(s.get('put_options', {}).get('market_data', {}).get('oi', 0) for s in strikes)
 
     for s in selected:
         strike_price = s.get('strike_price', 0)
         marker = "►" if strike_price == atm_strike.get('strike_price', 0) else " "
         
-        ce = s.get('call_options', {})
-        ce_md = ce.get('market_data', {})
-        ce_g = ce.get('greeks', {})
-        pe = s.get('put_options', {})
-        pe_md = pe.get('market_data', {})
-        pe_g = pe.get('greeks', {})
+        ce = s.get('call_options', {}); ce_md = ce.get('market_data', {}); ce_g = ce.get('greeks', {})
+        pe = s.get('put_options', {}); pe_md = pe.get('market_data', {}); pe_g = pe.get('greeks', {})
         
         ce_oi_str = format_value(ce_md.get('oi', 0)); ce_vol_str = format_value(ce_md.get('volume', 0))
         pe_oi_str = format_value(pe_md.get('oi', 0)); pe_vol_str = format_value(pe_md.get('volume', 0))
 
-        # Data Line
         msg += f"{ce_oi_str:>5} {ce_vol_str:>6} {ce_md.get('ltp', 0):>7.1f} |{marker}{strike_price:<8.0f}| {pe_md.get('ltp', 0):>7.1f} {pe_vol_str:>6} {pe_oi_str:>5}\n"
-        # Greeks Line
-        ce_d = f"Δ{ce_g.get('delta', 0):.1f}"
-        ce_t = f"Θ{ce_g.get('theta', 0):.1f}"
-        pe_d = f"Δ{pe_g.get('delta', 0):.1f}"
-        pe_t = f"Θ{pe_g.get('theta', 0):.1f}"
+        
+        ce_d = f"Δ{ce_g.get('delta', 0):.1f}"; ce_t = f"Θ{ce_g.get('theta', 0):.1f}"
+        pe_d = f"Δ{pe_g.get('delta', 0):.1f}"; pe_t = f"Θ{pe_g.get('theta', 0):.1f}"
         msg += f" {ce_d:<5} {ce_t:<11} |        | {pe_d:<11} {pe_t:<5}\n"
 
     msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -269,9 +325,9 @@ async def process_instrument(bot, key, name, expiry_day, is_stock=False, idx=0, 
         else:
              print("    ⚠️ No option chain data found.")
 
-        candles, _ = get_live_candles(key, name)
+        candles, hist_count = get_live_candles(key, name)
         if candles:
-            chart = create_premium_chart(candles, name, spot, 0)
+            chart = create_premium_chart(candles, name, spot, hist_count)
             if chart:
                 caption = f"📈 *{name}*\n💰 `₹{spot:,.2f}`"
                 await send_telegram_message(bot, photo=chart, caption=caption)
@@ -328,11 +384,13 @@ async def main():
             print(f"\n💤 Market closed. Current time: {now.strftime('%I:%M %p')}. Checking again in 15 mins.")
             if now.hour >= 16 and DAILY_STATS["start_time"] is not None:
                  print("🔄 Resetting daily stats for next day...")
-                 for key in ['total_alerts', 'indices_count', 'stocks_count', 'start_time']: DAILY_STATS[key] = 0 if key != 'start_time' else None
+                 DAILY_STATS["total_alerts"] = 0
+                 DAILY_STATS["indices_count"] = 0
+                 DAILY_STATS["stocks_count"] = 0
+                 DAILY_STATS["start_time"] = None
             await asyncio.sleep(900)
 
 if __name__ == "__main__":
-    from datetime import time
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
