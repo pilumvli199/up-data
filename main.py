@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-COMPLETE MARKET MONITOR - v5 (Clearer Candlesticks)
+COMPLETE MARKET MONITOR - v6 (Professional Candlestick Charts)
 - ALL NIFTY 50 Stocks + POONAWALLA
 - NIFTY 50, BANK NIFTY, FIN NIFTY, MIDCAP NIFTY
-- FIX: Improved candlestick rendering for better clarity, especially with more historical data.
+- FIX: Complete overhaul of chart rendering for professional, clear candlesticks with distinct wicks and bodies.
 - Enhanced option chain with OI, Volume, and GREEKS.
 """
 
@@ -61,7 +61,7 @@ NIFTY50_STOCKS = {
 # Global tracking
 DAILY_STATS = {"total_alerts": 0, "indices_count": 0, "stocks_count": 0, "start_time": None}
 
-print("="*70); print("🚀 COMPLETE MARKET MONITOR - v5 (Clearer Candlesticks)"); print("="*70)
+print("="*70); print("🚀 COMPLETE MARKET MONITOR - v6 (Professional Charts)"); print("="*70)
 
 def get_expiries(instrument_key):
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
@@ -121,60 +121,40 @@ def get_spot_price(instrument_key):
     return 0
 
 def split_30min_to_5min(candle_30min):
-    """Helper function to split a 30-min candle into six 5-min candles."""
     try:
-        timestamp, open_price, high_price, low_price, close_price, volume, oi = candle_30min
-        dt_start = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).astimezone(IST)
-        
-        # Approximate price and volume distribution
-        price_range = high_price - low_price
+        ts_str, o, h, l, c, v, oi = candle_30min
+        dt_start = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).astimezone(IST)
         
         candles_5min = []
         for i in range(6):
             c_time = dt_start + timedelta(minutes=i * 5)
-            # For simplicity, distribute the 30min candle's range across 5min candles
-            # More sophisticated methods exist but this gives a visual representation
-            c_open = open_price + (close_price - open_price) * (i / 6)
-            c_close = open_price + (close_price - open_price) * ((i + 1) / 6)
+            # This is a visual approximation, not for technical analysis
+            c_open = o + (c - o) * (i / 6)
+            c_close = o + (c - o) * ((i + 1) / 6)
+            c_high = max(h, c_open, c_close)
+            c_low = min(l, c_open, c_close)
             
-            # Ensure high is never below close/open and low is never above
-            c_high = max(c_open, c_close, open_price, close_price) # Simplified
-            c_low = min(c_open, c_close, open_price, close_price)  # Simplified
-
-            candles_5min.append([
-                c_time.isoformat(), c_open, c_high, c_low, c_close,
-                volume / 6, oi # Distribute volume, keep OI same for simplicity
-            ])
+            candles_5min.append([c_time.isoformat(), c_open, c_high, c_low, c_close, v / 6, oi])
         return candles_5min
     except Exception:
         return []
 
-
 def get_live_candles(instrument_key, symbol):
-    """
-    Fetches 30-min historical data, splits it into 5-min candles,
-    and then combines with today's live data for a robust chart.
-    """
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     
-    # 1. Fetch Historical Data (Last 15 days, 30-minute interval)
     historical_5min_candles = []
     try:
-        # Fetch up to yesterday
         to_date = (datetime.now(IST) - timedelta(days=1)).strftime('%Y-%m-%d')
         from_date = (datetime.now(IST) - timedelta(days=15)).strftime('%Y-%m-%d')
         url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/30minute/{to_date}/{from_date}"
-        
         resp = requests.get(url, headers=headers, timeout=20)
         if resp.status_code == 200 and resp.json().get('status') == 'success':
-            candles_30min = resp.json().get('data', {}).get('candles', [])
-            for candle in candles_30min:
+            for candle in resp.json().get('data', {}).get('candles', []):
                 historical_5min_candles.extend(split_30min_to_5min(candle))
     except Exception as e:
         print(f"  ⚠️ Historical candle error: {e}")
 
-    # 2. Fetch Today's Live Data (1-minute interval) and resample
     intraday_5min_candles = []
     try:
         url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
@@ -182,39 +162,20 @@ def get_live_candles(instrument_key, symbol):
         if resp.status_code == 200 and resp.json().get('status') == 'success':
             candles_1min = resp.json().get('data', {}).get('candles', [])
             if candles_1min:
-                df = pd.DataFrame(candles_1min, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                df.set_index('timestamp', inplace=True)
-                df = df.astype(float)
-                
-                df_resampled = df.resample('5min').agg({
-                    'open': 'first', 'high': 'max', 'low': 'min',
-                    'close': 'last', 'volume': 'sum', 'oi': 'last'
-                }).dropna()
-                
-                intraday_5min_candles = [[index.isoformat(), row['open'], row['high'], row['low'], row['close'], row['volume'], row['oi']] for index, row in df_resampled.iterrows()]
+                df = pd.DataFrame(candles_1min, columns=['ts', 'o', 'h', 'l', 'c', 'v', 'oi'])
+                df['ts'] = pd.to_datetime(df['ts'])
+                df = df.set_index('ts').astype(float)
+                df_resampled = df.resample('5min').agg({'o':'first', 'h':'max', 'l':'min', 'c':'last', 'v':'sum', 'oi':'last'}).dropna()
+                intraday_5min_candles = [[idx.isoformat(), r['o'], r['h'], r['l'], r['c'], r['v'], r['oi']] for idx, r in df_resampled.iterrows()]
     except Exception as e:
         print(f"  ⚠️ Intraday candle error: {e}")
         
     all_candles = sorted(historical_5min_candles + intraday_5min_candles, key=lambda x: x[0])
     
-    # Filter to last 5 market days of data (approx)
     today = datetime.now(IST).date()
-    # Find the starting point for approx 5 market days
-    five_days_ago = today
-    day_count = 0
-    while day_count < 5:
-        five_days_ago -= timedelta(days=1)
-        # Check if it's a weekday and not a holiday (approximation)
-        if five_days_ago.weekday() < 5: # Monday=0, Sunday=6
-            day_count += 1
-            
-    filtered_candles = [c for c in all_candles if datetime.fromisoformat(c[0].replace("Z", "+00:00")).astimezone(IST).date() >= five_days_ago]
-    
-    # Recalculate hist_count based on filtered_candles
-    hist_count = len([c for c in filtered_candles if datetime.fromisoformat(c[0].replace("Z", "+00:00")).astimezone(IST).date() < today])
+    hist_count = len([c for c in all_candles if datetime.fromisoformat(c[0]).astimezone(IST).date() < today])
 
-    return filtered_candles, hist_count
+    return all_candles, hist_count
 
 
 def create_premium_chart(candles, symbol, spot_price, hist_count):
@@ -225,33 +186,41 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
         try:
             ts = datetime.fromisoformat(c[0].replace("Z", "+00:00")).astimezone(IST)
             if time(9, 15) <= ts.time() <= time(15, 30):
-                data.append({'timestamp': ts, 'open': float(c[1]), 'high': float(c[2]), 'low': float(c[3]), 'close': float(c[4]), 'volume': int(c[5])})
-        except (ValueError, TypeError):
-            continue
+                data.append({'ts': ts, 'o': float(c[1]), 'h': float(c[2]), 'l': float(c[3]), 'c': float(c[4]), 'v': int(c[5])})
+        except (ValueError, TypeError): continue
     
     if not data: return None
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(28, 13), gridspec_kw={'height_ratios': [4, 1]}, facecolor='#0e1217')
     for ax in [ax1, ax2]: ax.set_facecolor('#0e1217')
     
-    # Dynamic width for candlesticks
-    candle_width = min(0.7, 10 / len(data)) # Adjust width based on number of candles
-    line_width = max(0.8, 1.5 - (len(data) / 100)) # Adjust line width
+    # --- PROFESSIONAL CANDLESTICK RENDERING LOGIC ---
+    candle_body_width = 0.6
     
     for i, row in enumerate(data):
         is_today = i >= hist_count
-        alpha = 1.0 if is_today else 0.8 # Slightly more opaque for historical data
-        color = '#26a69a' if row['close'] >= row['open'] else '#ef5350'
-        ax1.plot([i, i], [row['low'], row['high']], color=color, linewidth=line_width, alpha=alpha) # Increased linewidth
-        ax1.add_patch(Rectangle((i - candle_width/2, min(row['open'], row['close'])), candle_width, abs(row['close'] - row['open']), facecolor=color, alpha=alpha))
+        alpha = 1.0 if is_today else 0.8
+        color = '#26a69a' if row['c'] >= row['o'] else '#ef5350'
+        
+        # 1. Draw the Wick (thin line from High to Low)
+        ax1.plot([i, i], [row['l'], row['h']], color=color, linewidth=1.2, alpha=alpha, zorder=1)
+        
+        # 2. Draw the Body (thicker rectangle from Open to Close)
+        body_height = abs(row['c'] - row['o'])
+        body_bottom = min(row['o'], row['c'])
+        rect = Rectangle((i - candle_body_width/2, body_bottom), candle_body_width, body_height, facecolor=color, alpha=alpha, zorder=2)
+        ax1.add_patch(rect)
 
-        ax2.bar(i, row['volume'], width=candle_width, color=color, alpha=alpha) # Use dynamic width for volume bars
+        # 3. Volume Bar
+        ax2.bar(i, row['v'], width=0.7, color=color, alpha=alpha)
+
+    # --- END OF RENDERING LOGIC ---
 
     if hist_count > 0 and hist_count < len(data):
         ax1.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', linewidth=1.5, alpha=0.7)
         ax2.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', linewidth=1.5, alpha=0.7)
 
-    ax1.axhline(y=spot_price, color='#2962ff', linestyle='--', linewidth=2.5, alpha=0.9, zorder=4)
+    ax1.axhline(y=spot_price, color='#2962ff', linestyle='--', linewidth=2.5, alpha=0.9)
     ax1_right = ax1.twinx(); ax1_right.set_ylim(ax1.get_ylim()); ax1_right.set_yticks([spot_price])
     ax1_right.set_yticklabels([f'₹{spot_price:.2f}'], fontsize=13, fontweight='700', color='#2962ff', bbox=dict(facecolor='#2962ff', alpha=0.3))
     
@@ -261,23 +230,16 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     tick_positions = []
     tick_labels = []
     last_date_label = None
-    
-    # Logic to put date label only once per day
-    for i in range(len(data)):
-        current_date = data[i]['timestamp'].date()
+    for i, row in enumerate(data):
+        current_date = row['ts'].date()
         if current_date != last_date_label:
             tick_positions.append(i)
-            tick_labels.append(data[i]['timestamp'].strftime('%d %b'))
+            tick_labels.append(row['ts'].strftime('%d %b'))
             last_date_label = current_date
-        elif i % (60 / 5 * 2) == 0: # Every 2 hours (approx 24 candles) for time, if not a new day
-             if len(data) > 100: # Only add time labels if many candles
-                tick_positions.append(i)
-                tick_labels.append(data[i]['timestamp'].strftime('%H:%M'))
     
-    # Ensure there are enough labels, or simplify if too many
-    if len(tick_positions) > 15: # Arbitrary threshold for too many labels
-        # Resample labels to get fewer, more spread out ones
-        step = max(1, len(tick_positions) // 10) # Aim for ~10 labels
+    # Simplify labels if there are too many days shown
+    if len(tick_positions) > 10:
+        step = max(1, len(tick_positions) // 7)
         tick_positions = tick_positions[::step]
         tick_labels = tick_labels[::step]
 
