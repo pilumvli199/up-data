@@ -31,7 +31,7 @@ IST = pytz.timezone('Asia/Kolkata')
 
 # INDICES - ALL 4
 INDICES = {
-    "NSE_INDEX|Nifty 50": {"name": "NIFTY 50", "expiry_day": 1},  # Tuesday
+    "NSE_INDEX|Nifty 50": {"name": "NIFTY 50", "expiry_day": 1},      # Tuesday
     "NSE_INDEX|Nifty Bank": {"name": "BANK NIFTY", "expiry_day": 2},  # Wednesday
     "NSE_INDEX|Nifty Fin Service": {"name": "FIN NIFTY", "expiry_day": 1},  # Tuesday
     "NSE_INDEX|NIFTY MID SELECT": {"name": "MIDCAP NIFTY", "expiry_day": 0}  # Monday
@@ -39,56 +39,31 @@ INDICES = {
 
 # COMPLETE NIFTY 50 STOCKS + POONAWALLA (ALL 51)
 NIFTY50_STOCKS = {
-    "NSE_EQ|INE002A01018": "RELIANCE",
-    "NSE_EQ|INE467B01029": "TATAMOTORS",
-    "NSE_EQ|INE040A01034": "HDFCBANK",
-    "NSE_EQ|INE090A01021": "ICICIBANK",
-    "NSE_EQ|INE062A01020": "SBIN",
-    "NSE_EQ|INE009A01021": "INFY",
-    "NSE_EQ|INE854D01024": "TCS",
-    "NSE_EQ|INE594E01019": "HINDUNILVR",
-    "NSE_EQ|INE030A01027": "BHARTIARTL",
-    "NSE_EQ|INE238A01034": "AXISBANK",
-    "NSE_EQ|INE192A01025": "KOTAKBANK",
-    "NSE_EQ|INE155A01022": "TATASTEEL",
-    "NSE_EQ|INE047A01021": "HCLTECH",
-    "NSE_EQ|INE742F01042": "ADANIENT",
-    "NSE_EQ|INE012A01025": "WIPRO",
-    "NSE_EQ|INE018A01030": "LT",
-    "NSE_EQ|INE019A01038": "ASIANPAINT",
-    "NSE_EQ|INE205A01025": "MARUTI",
-    "NSE_EQ|INE795G01014": "ADANIPORTS",
-    "NSE_EQ|INE001A01036": "ULTRACEMCO",
-    "NSE_EQ|INE021A01026": "M&M",
-    "NSE_EQ|INE245A01021": "SUNPHARMA",
-    "NSE_EQ|INE114A01011": "TITAN",
-    "NSE_EQ|INE758T01015": "TECHM",
-    "NSE_EQ|INE522F01014": "COALINDIA",
-    "NSE_EQ|INE066F01012": "JSWSTEEL",
-    "NSE_EQ|INE216A01030": "NTPC",
-    "NSE_EQ|INE029A01011": "POWERGRID",
-    "NSE_EQ|INE101D01020": "NESTLEIND",
-    "NSE_EQ|INE123W01016": "BAJFINANCE",
-    "NSE_EQ|INE296A01024": "ONGC",
-    "NSE_EQ|INE044A01036": "HINDALCO",
-    "NSE_EQ|INE242A01010": "ITC",
-    "NSE_EQ|INE860A01027": "HDFCLIFE",
-    "NSE_EQ|INE075A01022": "SBILIFE",
-    "NSE_EQ|INE213A01029": "EICHERMOT",
-    "NSE_EQ|INE129A01019": "GRASIM",
-    "NSE_EQ|INE180A01020": "INDUSINDBK",
-    "NSE_EQ|INE481G01011": "BAJAJFINSV",
-    "NSE_EQ|INE217A01012": "HEROMOTOCO",
-    "NSE_EQ|INE239A01016": "DIVISLAB",
-    "NSE_EQ|INE009A01011": "CIPLA",
-    "NSE_EQ|INE131A01031": "APOLLOHOSP",
-    "NSE_EQ|INE040H01021": "ADANIGREEN",
-    "NSE_EQ|INE032A01023": "BPCL",
-    "NSE_EQ|INE030E01023": "BRITANNIA",
-    "NSE_EQ|INE758E01017": "LTIM",
-    "NSE_EQ|INE093I01010": "TRENT",
-    "NSE_EQ|INE752E01010": "SHRIRAMFIN",
-    "NSE_EQ|INE196A01026": "BEL",
+    "NSE_EQ|INE002A01018": "RELIANCE", "NSE_EQ|INE467B01029": "TATAMOTORS",
+    "NSE_EQ|INE040A01034": "HDFCBANK", "NSE_EQ|INE090A01021": "ICICIBANK",
+    "NSE_EQ|INE062A01020": "SBIN", "NSE_EQ|INE009A01021": "INFY",
+    "NSE_EQ|INE854D01024": "TCS", "NSE_EQ|INE594E01019": "HINDUNILVR",
+    "NSE_EQ|INE030A01027": "BHARTIARTL", "NSE_EQ|INE238A01034": "AXISBANK",
+    "NSE_EQ|INE192A01025": "KOTAKBANK", "NSE_EQ|INE155A01022": "TATASTEEL",
+    "NSE_EQ|INE047A01021": "HCLTECH", "NSE_EQ|INE742F01042": "ADANIENT",
+    "NSE_EQ|INE012A01025": "WIPRO", "NSE_EQ|INE018A01030": "LT",
+    "NSE_EQ|INE019A01038": "ASIANPAINT", "NSE_EQ|INE205A01025": "MARUTI",
+    "NSE_EQ|INE795G01014": "ADANIPORTS", "NSE_EQ|INE001A01036": "ULTRACEMCO",
+    "NSE_EQ|INE021A01026": "M&M", "NSE_EQ|INE245A01021": "SUNPHARMA",
+    "NSE_EQ|INE114A01011": "TITAN", "NSE_EQ|INE758T01015": "TECHM",
+    "NSE_EQ|INE522F01014": "COALINDIA", "NSE_EQ|INE066F01012": "JSWSTEEL",
+    "NSE_EQ|INE216A01030": "NTPC", "NSE_EQ|INE029A01011": "POWERGRID",
+    "NSE_EQ|INE101D01020": "NESTLEIND", "NSE_EQ|INE123W01016": "BAJFINANCE",
+    "NSE_EQ|INE296A01024": "ONGC", "NSE_EQ|INE044A01036": "HINDALCO",
+    "NSE_EQ|INE242A01010": "ITC", "NSE_EQ|INE860A01027": "HDFCLIFE",
+    "NSE_EQ|INE075A01022": "SBILIFE", "NSE_EQ|INE213A01029": "EICHERMOT",
+    "NSE_EQ|INE129A01019": "GRASIM", "NSE_EQ|INE180A01020": "INDUSINDBK",
+    "NSE_EQ|INE481G01011": "BAJAJFINSV", "NSE_EQ|INE217A01012": "HEROMOTOCO",
+    "NSE_EQ|INE239A01016": "DIVISLAB", "NSE_EQ|INE009A01011": "CIPLA",
+    "NSE_EQ|INE131A01031": "APOLLOHOSP", "NSE_EQ|INE040H01021": "ADANIGREEN",
+    "NSE_EQ|INE032A01023": "BPCL", "NSE_EQ|INE030E01023": "BRITANNIA",
+    "NSE_EQ|INE758E01017": "LTIM", "NSE_EQ|INE093I01010": "TRENT",
+    "NSE_EQ|INE752E01010": "SHRIRAMFIN", "NSE_EQ|INE196A01026": "BEL",
     "NSE_EQ|INE511C01022": "POONAWALLA",  # ADDED POONAWALLA
 }
 
@@ -261,7 +236,7 @@ def get_live_candles(instrument_key, symbol):
                 today_candles_1min = data.get('data', {}).get('candles', [])
                 if today_candles_1min:
                     today_candles_1min = sorted(today_candles_1min,
-                                               key=lambda x: datetime.fromisoformat(x[0].replace('Z', '+00:00')))
+                                                key=lambda x: datetime.fromisoformat(x[0].replace('Z', '+00:00')))
                     
                     i = 0
                     while i < len(today_candles_1min):
@@ -290,7 +265,7 @@ def get_live_candles(instrument_key, symbol):
     
     if all_candles:
         all_candles = sorted(all_candles,
-                            key=lambda x: datetime.fromisoformat(x[0].replace('Z', '+00:00')))
+                             key=lambda x: datetime.fromisoformat(x[0].replace('Z', '+00:00')))
         return all_candles, len(historical_5min)
     
     return [], 0
@@ -349,20 +324,20 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
         body_color = '#26a69a' if is_bullish else '#ef5350'
         
         ax1.plot([x, x], [row['low'], row['high']],
-                color=body_color, linewidth=1.3, solid_capstyle='round',
-                alpha=alpha, zorder=2)
+                 color=body_color, linewidth=1.3, solid_capstyle='round',
+                 alpha=alpha, zorder=2)
         
         body_height = abs(row['close'] - row['open'])
         body_bottom = min(row['open'], row['close'])
         
         if body_height > 0.001:
             rect = Rectangle((x - 0.35, body_bottom), 0.7, body_height,
-                           facecolor=body_color, edgecolor=body_color,
-                           linewidth=0, alpha=alpha, zorder=3)
+                             facecolor=body_color, edgecolor=body_color,
+                             linewidth=0, alpha=alpha, zorder=3)
             ax1.add_patch(rect)
         else:
             ax1.plot([x - 0.35, x + 0.35], [row['open'], row['open']],
-                    color=body_color, linewidth=1.5, alpha=alpha, zorder=3)
+                     color=body_color, linewidth=1.5, alpha=alpha, zorder=3)
     
     today_idx = None
     for i, d in enumerate(data):
@@ -372,12 +347,12 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     
     if today_idx:
         ax1.axvline(x=today_idx, color='#ffa726', linestyle='--',
-                   linewidth=2, alpha=0.5, zorder=1)
+                    linewidth=2, alpha=0.5, zorder=1)
         ax2.axvline(x=today_idx, color='#ffa726', linestyle='--',
-                   linewidth=2, alpha=0.5, zorder=1)
+                    linewidth=2, alpha=0.5, zorder=1)
     
     ax1.axhline(y=spot_price, color='#2962ff', linestyle='--',
-               linewidth=2.5, alpha=0.9, zorder=4)
+                linewidth=2.5, alpha=0.9, zorder=4)
     
     ax1_right = ax1.twinx()
     ax1_right.set_ylim(ax1.get_ylim())
@@ -385,7 +360,7 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     ax1_right.set_yticklabels([f'₹{spot_price:.2f}'],
                               fontsize=13, fontweight='700', color='#2962ff',
                               bbox=dict(boxstyle='round,pad=0.6',
-                                      facecolor='#2962ff', alpha=0.3))
+                                        facecolor='#2962ff', alpha=0.3))
     ax1_right.tick_params(colors='#2962ff', length=0, pad=10)
     ax1_right.set_facecolor('#0e1217')
     
@@ -398,7 +373,7 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     now_str = datetime.now(IST).strftime('%d %b %Y • %I:%M:%S %p IST')
     title = f'{symbol}  •  5 Min Chart (LIVE)  •  {now_str}'
     ax1.set_title(title, color='#d1d4dc', fontsize=17, fontweight='700',
-                 pad=25, loc='left')
+                  pad=25, loc='left')
     
     volumes = [d['volume'] for d in data]
     colors_vol = []
@@ -410,7 +385,7 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
         colors_vol.append((matplotlib.colors.to_rgba(color, alpha=alpha_vol)))
     
     ax2.bar(range(len(volumes)), volumes, color=colors_vol,
-           width=0.7, edgecolor='none')
+            width=0.7, edgecolor='none')
     
     ax2.set_ylabel('Volume', color='#b2b5be', fontsize=13, fontweight='600')
     ax2.tick_params(axis='y', colors='#787b86', labelsize=11, width=0)
@@ -436,14 +411,14 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     ax2.spines['top'].set_visible(False)
     
     ax2.set_xlabel('Date & Time (IST)', color='#b2b5be',
-                  fontsize=13, fontweight='600', labelpad=12)
+                   fontsize=13, fontweight='600', labelpad=12)
     
     plt.tight_layout(pad=2)
     plt.subplots_adjust(hspace=0.08)
     
     buf = io.BytesIO()
     plt.savefig(buf, format='png', dpi=160, facecolor='#0e1217',
-               edgecolor='none', bbox_inches='tight')
+                edgecolor='none', bbox_inches='tight')
     buf.seek(0)
     plt.close(fig)
     
@@ -455,7 +430,7 @@ def format_option_chain_message(symbol, spot, expiry, strikes):
         return None
     
     atm_index = min(range(len(strikes)),
-                   key=lambda i: abs(strikes[i].get('strike_price', 0) - spot))
+                    key=lambda i: abs(strikes[i].get('strike_price', 0) - spot))
     start = max(0, atm_index - 8)
     end = min(len(strikes), atm_index + 9)
     selected = strikes[start:end]
@@ -467,7 +442,7 @@ def format_option_chain_message(symbol, spot, expiry, strikes):
     
     msg += "```\n"
     msg += "═══ CALLS ═══════════════════ PUTS ═══\n"
-    msg += "Vol   LTP  Strike  LTP   Vol\n"
+    msg += "Vol    LTP   Strike   LTP    Vol\n"
     msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     
     total_ce_vol = total_pe_vol = 0
@@ -500,7 +475,7 @@ def format_option_chain_message(symbol, spot, expiry, strikes):
         msg += f"{ce_vol_str:>5} {ce_ltp:6.1f} {marker}{strike_price:6.0f} {pe_ltp:6.1f} {pe_vol_str:>5}\n"
     
     msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"TOTAL VOL: {total_ce_vol/1000:.0f}K        {total_pe_vol/1000:.0f}K\n"
+    msg += f"TOTAL VOL: {total_ce_vol/1000:.0f}K         {total_pe_vol/1000:.0f}K\n"
     msg += "```\n\n"
     
     pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
@@ -523,7 +498,7 @@ async def send_telegram_photo(photo_buf, caption):
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
         await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_buf,
-                           caption=caption, parse_mode='Markdown')
+                             caption=caption, parse_mode='Markdown')
         DAILY_STATS["total_alerts"] += 1
         return True
     except Exception as e:
@@ -536,7 +511,7 @@ async def process_index(index_key, index_info):
     expiry_day = index_info["expiry_day"]
     
     print(f"\n{'='*60}")
-    print(f"{name}")
+    print(f"INDEX: {name}")
     print(f"{'='*60}")
     
     try:
@@ -544,17 +519,54 @@ async def process_index(index_key, index_info):
         spot = get_spot_price(index_key)
         
         if spot == 0:
-            print("❌ Invalid spot price")
+            print("  ❌ Invalid spot price")
             return False
         
-        print(f"✅ Spot: ₹{spot:.2f}")
+        print(f"  ✅ Spot: ₹{spot:.2f}")
+        
+        strikes = get_option_chain(index_key, expiry)
+        if strikes:
+            msg = format_option_chain_message(name, spot, expiry, strikes)
+            if msg:
+                await send_telegram_text(msg)
+                print("    📤 Chain sent")
+        
+        candles, hist_count = get_live_candles(index_key, name)
+        if candles and len(candles) >= 10:
+            chart = create_premium_chart(candles, name, spot, hist_count)
+            if chart:
+                caption = f"📈 *{name}*\n💰 ₹{spot:.2f}"
+                await send_telegram_photo(chart, caption)
+                print("    📤 Chart sent")
+        
+        DAILY_STATS["indices_count"] += 1
+        return True
+        
+    except Exception as e:
+        print(f"  ❌ Error: {e}")
+        return False
+
+async def process_stock(key, symbol, idx, total):
+    """Process stock"""
+    print(f"\n[{idx}/{total}] STOCK: {symbol}")
+    
+    try:
+        # Stock options typically have monthly expiries, Thursday
+        expiry = get_next_expiry(key, expiry_day=3) 
+        spot = get_spot_price(key)
+        
+        if spot == 0:
+            print("  ❌ Invalid spot price")
+            return False
+        
+        print(f"  ✅ Spot: ₹{spot:.2f}")
         
         strikes = get_option_chain(key, expiry)
         if strikes:
             msg = format_option_chain_message(symbol, spot, expiry, strikes)
             if msg:
                 await send_telegram_text(msg)
-                print("  📤 Chain sent")
+                print("    📤 Chain sent")
         
         candles, hist_count = get_live_candles(key, symbol)
         if candles and len(candles) >= 10:
@@ -562,7 +574,7 @@ async def process_index(index_key, index_info):
             if chart:
                 caption = f"📈 *{symbol}*\n💰 ₹{spot:.2f}"
                 await send_telegram_photo(chart, caption)
-                print("  📤 Chart sent")
+                print("    📤 Chart sent")
         
         DAILY_STATS["stocks_count"] += 1
         return True
@@ -616,7 +628,7 @@ async def fetch_all():
     print("="*60)
     
     # Check if it's 3:30 PM for daily summary
-    is_summary_time = (now.hour == 15 and now.minute == 30)
+    is_summary_time = (now.hour == 15 and now.minute >= 30 and now.minute < 35) # check in a 5 min window
     
     header = f"🚀 *MARKET UPDATE*\n⏰ {now.strftime('%I:%M %p')}\n\n_Processing 4 indices + 51 stocks..._"
     await send_telegram_text(header)
@@ -626,15 +638,17 @@ async def fetch_all():
     print("PROCESSING INDICES (4)")
     print("="*60)
     
+    DAILY_STATS["indices_count"] = 0 # Reset for current run
     for idx_key, idx_info in INDICES.items():
         await process_index(idx_key, idx_info)
-        await asyncio.sleep(3)
+        await asyncio.sleep(3) # API rate limiting
     
     # Process all 51 STOCKS
     print("\n" + "="*60)
     print("PROCESSING STOCKS (51)")
     print("="*60)
     
+    DAILY_STATS["stocks_count"] = 0 # Reset for current run
     success = 0
     total = len(NIFTY50_STOCKS)
     
@@ -642,7 +656,7 @@ async def fetch_all():
         result = await process_stock(key, symbol, idx, total)
         if result:
             success += 1
-        await asyncio.sleep(3)
+        await asyncio.sleep(3) # API rate limiting
     
     # Send completion summary
     summary = f"✅ *UPDATE COMPLETE*\n\n"
@@ -662,19 +676,17 @@ async def monitoring_loop():
     """Main monitoring loop - runs every 5 minutes"""
     print("\n🔄 Monitoring started (5 min interval)\n")
     
-    # Initialize start time
-    DAILY_STATS["start_time"] = datetime.now(IST)
+    if DAILY_STATS["start_time"] is None:
+        DAILY_STATS["start_time"] = datetime.now(IST)
     
     while True:
         try:
             current_time = datetime.now(IST)
             
-            # Check if market is open (9:15 AM to 3:30 PM, Mon-Fri)
             if current_time.weekday() < 5:  # Monday to Friday
                 hour = current_time.hour
                 minute = current_time.minute
                 
-                # Market hours: 9:15 AM to 3:30 PM
                 is_market_open = (
                     (hour == 9 and minute >= 15) or
                     (10 <= hour < 15) or
@@ -684,24 +696,22 @@ async def monitoring_loop():
                 if is_market_open:
                     await fetch_all()
                     
-                    next_time = (current_time + timedelta(minutes=5)).strftime('%I:%M %p')
-                    print(f"\n⏳ Next run: {next_time}\n")
-                    
+                    next_run_time = current_time + timedelta(minutes=5)
+                    print(f"\n⏳ Next run: {next_run_time.strftime('%I:%M %p')}\n")
                     await asyncio.sleep(300)  # 5 minutes
                 else:
                     print(f"\n💤 Market closed. Current time: {current_time.strftime('%I:%M %p')}")
                     print("⏰ Market hours: 9:15 AM - 3:30 PM")
                     
-                    # Reset daily stats at end of day
                     if hour >= 16:
-                        print("🔄 Resetting daily stats...")
-                        DAILY_STATS["total_alerts"] = 0
-                        DAILY_STATS["indices_count"] = 0
-                        DAILY_STATS["stocks_count"] = 0
-                        DAILY_STATS["start_time"] = None
+                        if DAILY_STATS["start_time"] is not None:
+                            print("🔄 Resetting daily stats for next day...")
+                            DAILY_STATS["total_alerts"] = 0
+                            DAILY_STATS["indices_count"] = 0
+                            DAILY_STATS["stocks_count"] = 0
+                            DAILY_STATS["start_time"] = None
                     
-                    # Wait 15 minutes before checking again
-                    await asyncio.sleep(900)
+                    await asyncio.sleep(900) # Wait 15 minutes before checking again
             else:
                 day_name = current_time.strftime('%A')
                 print(f"\n💤 Weekend - {day_name}")
@@ -715,7 +725,7 @@ async def monitoring_loop():
             print(f"\n❌ Loop error: {e}")
             import traceback
             traceback.print_exc()
-            await asyncio.sleep(60)
+            await asyncio.sleep(60) # Wait 1 minute after an error
 
 async def main():
     """Entry point"""
@@ -736,13 +746,11 @@ async def main():
     print("  • Daily Summary: 3:30 PM")
     print("\n✨ FEATURES:")
     print("  • Historical + Live data separation")
-    print("  • Enhanced option chain (Vol, OI, OI Changes)")
-    print("  • Greeks (Delta, Gamma, Theta, Vega, IV)")
+    print("  • Enhanced option chain (Vol, OI)")
     print("  • Premium TradingView-style charts")
     print("  • 3:30 PM daily summary with full stats")
     print("="*70 + "\n")
     
-    # Show current status
     now = datetime.now(IST)
     print(f"🕐 Current Time: {now.strftime('%I:%M %p IST, %A, %d %B %Y')}")
     
@@ -758,38 +766,4 @@ async def main():
     await monitoring_loop()
 
 if __name__ == "__main__":
-    asyncio.run(main())_option_chain(index_key, expiry)
-        if strikes:
-            msg = format_option_chain_message(name, spot, expiry, strikes)
-            if msg:
-                await send_telegram_text(msg)
-                print("📤 Option chain sent")
-        
-        candles, hist_count = get_live_candles(index_key, name)
-        if candles and len(candles) >= 10:
-            chart = create_premium_chart(candles, name, spot, hist_count)
-            if chart:
-                caption = f"📈 *{name}*\n💰 ₹{spot:.2f}"
-                await send_telegram_photo(chart, caption)
-                print("📤 Chart sent")
-        
-        DAILY_STATS["indices_count"] += 1
-        return True
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        return False
-
-async def process_stock(key, symbol, idx, total):
-    """Process stock"""
-    print(f"\n[{idx}/{total}] {symbol}")
-    
-    try:
-        expiry = get_next_expiry(key, expiry_day=3)
-        spot = get_spot_price(key)
-        
-        if spot == 0:
-            print("  ❌ Invalid spot")
-            return False
-        
-        strikes = get
+    asyncio.run(main())
