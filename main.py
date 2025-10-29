@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 COMPLETE MARKET MONITOR
-- NIFTY 50, BANKNIFTY, FINNIFTY, MIDCPNIFTY
+- NIFTY 50: Weekly (Tuesday)
+- BANKNIFTY, FINNIFTY, MIDCPNIFTY: Monthly (nearest expiry)
+- SENSEX: Weekly (Thursday)
 - All NIFTY 50 Stocks + POONAWALLA
-- 3:30 PM Daily Summary
-- Rate limit management
 """
 
 import os
@@ -18,9 +18,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-import pandas as pd
 import io
-import time
 
 # CONFIG
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
@@ -29,16 +27,36 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BASE_URL = "https://api.upstox.com"
 IST = pytz.timezone('Asia/Kolkata')
 
-# INDICES
+# INDICES - with expiry type
 INDICES = {
-    "NSE_INDEX|Nifty 50": {"name": "NIFTY 50", "expiry_day": 1, "type": "Weekly Tuesday"},
-    "NSE_INDEX|Nifty Bank": {"name": "BANKNIFTY", "expiry_day": 2, "type": "Weekly Wednesday"},
-    "NSE_INDEX|Nifty Fin Service": {"name": "FINNIFTY", "expiry_day": 1, "type": "Weekly Tuesday"},
-    "NSE_INDEX|Nifty Midcap Select": {"name": "MIDCPNIFTY", "expiry_day": 0, "type": "Weekly Monday"},
-    "BSE_INDEX|SENSEX": {"name": "SENSEX", "expiry_day": 3, "type": "Weekly Thursday"},
+    "NSE_INDEX|Nifty 50": {
+        "name": "NIFTY 50",
+        "expiry_type": "weekly",
+        "expiry_day": 1  # Tuesday
+    },
+    "NSE_INDEX|Nifty Bank": {
+        "name": "BANKNIFTY",
+        "expiry_type": "monthly",
+        "expiry_day": None  # Auto nearest
+    },
+    "NSE_INDEX|Nifty Fin Service": {
+        "name": "FINNIFTY",
+        "expiry_type": "monthly",
+        "expiry_day": None
+    },
+    "NSE_INDEX|Nifty Midcap Select": {
+        "name": "MIDCPNIFTY",
+        "expiry_type": "monthly",
+        "expiry_day": None
+    },
+    "BSE_INDEX|SENSEX": {
+        "name": "SENSEX",
+        "expiry_type": "weekly",
+        "expiry_day": 3  # Thursday
+    },
 }
 
-# ALL NIFTY 50 STOCKS + POONAWALLA (Complete List)
+# ALL NIFTY 50 STOCKS + POONAWALLA
 NIFTY50_STOCKS = {
     "NSE_EQ|INE002A01018": "RELIANCE",
     "NSE_EQ|INE040A01034": "HDFCBANK",
@@ -60,7 +78,6 @@ NIFTY50_STOCKS = {
     "NSE_EQ|INE239A01016": "HINDALCO",
     "NSE_EQ|INE256A01028": "SUNPHARMA",
     "NSE_EQ|INE160A01022": "MARUTI",
-    "NSE_EQ|INE021A01026": "ASIANPAINT",
     "NSE_EQ|INE522F01014": "COALINDIA",
     "NSE_EQ|INE238A01034": "LTIM",
     "NSE_EQ|INE018E01016": "NTPC",
@@ -70,15 +87,13 @@ NIFTY50_STOCKS = {
     "NSE_EQ|INE423A01024": "ADANIPORTS",
     "NSE_EQ|INE448A01043": "SBILIFE",
     "NSE_EQ|INE220B01022": "BAJAJFINSV",
-    "NSE_EQ|INE239A01024": "JSWSTEEL",
+    "NSE_EQ|INE019A01038": "JSWSTEEL",
     "NSE_EQ|INE027A01015": "POWERGRID",
     "NSE_EQ|INE114A01011": "SHREECEM",
     "NSE_EQ|INE192A01025": "TATACONSUM",
-    "NSE_EQ|INE118A01012": "ADANIPOWER",
     "NSE_EQ|INE121A01024": "M&M",
     "NSE_EQ|INE769A01020": "ONGC",
     "NSE_EQ|INE127D01025": "HEROMOTOCO",
-    "NSE_EQ|INE669E01016": "TECHM",
     "NSE_EQ|INE066F01020": "EICHERMOT",
     "NSE_EQ|INE075A01022": "WIPRO",
     "NSE_EQ|INE040H01021": "SIEMENS",
@@ -90,10 +105,13 @@ NIFTY50_STOCKS = {
     "NSE_EQ|INE234A01024": "DIVISLAB",
     "NSE_EQ|INE180A01020": "DRREDDY",
     "NSE_EQ|INE020B01018": "BRITANNIA",
-    "NSE_EQ|INE752E01010": "POONAWALLA",  # POONAWALLA FINCORP
+    "NSE_EQ|INE721A01013": "SHRIRAMFIN",
+    "NSE_EQ|INE101D01020": "TRENT",
+    "NSE_EQ|INE685A01028": "BAJAJ-AUTO",
+    "NSE_EQ|INE752E01010": "POONAWALLA",
 }
 
-# STATISTICS TRACKER
+# STATISTICS
 stats = {
     "total_runs": 0,
     "indices_success": 0,
@@ -103,12 +121,12 @@ stats = {
 }
 
 print("="*70)
-print("🚀 COMPLETE MARKET MONITOR")
+print("🚀 MARKET MONITOR")
 print(f"📊 {len(INDICES)} Indices + {len(NIFTY50_STOCKS)} Stocks")
 print("="*70)
 
 def get_expiries(instrument_key):
-    """Get available expiry dates"""
+    """Get all available expiry dates"""
     stats["total_api_calls"] += 1
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
@@ -127,23 +145,52 @@ def get_expiries(instrument_key):
         print(f"Expiry error: {e}")
     return []
 
-def get_next_expiry(instrument_key, expiry_day=1):
-    """Get next expiry (0=Monday, 1=Tuesday, 2=Wednesday, 3=Thursday)"""
+def get_nearest_expiry(instrument_key, expiry_type="weekly", expiry_day=None):
+    """
+    Get expiry based on type
+    expiry_type: 'weekly' or 'monthly'
+    expiry_day: 0=Mon, 1=Tue, 2=Wed, 3=Thu (for weekly)
+    """
     expiries = get_expiries(instrument_key)
     if not expiries:
-        today = datetime.now(IST)
-        days_ahead = expiry_day - today.weekday()
-        if days_ahead <= 0:
-            days_ahead += 7
-        return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+        return None
+    
     today = datetime.now(IST).date()
-    future = [e for e in expiries if datetime.strptime(e, '%Y-%m-%d').date() >= today]
-    if future:
-        return min(future)
-    return expiries[0]
+    future_expiries = [e for e in expiries if datetime.strptime(e, '%Y-%m-%d').date() >= today]
+    
+    if not future_expiries:
+        return None
+    
+    if expiry_type == "monthly":
+        # Get monthly expiries (last Thursday of month typically)
+        monthly_expiries = []
+        for exp_str in future_expiries:
+            exp_date = datetime.strptime(exp_str, '%Y-%m-%d').date()
+            # Check if it's near month end (after 20th)
+            if exp_date.day >= 20:
+                monthly_expiries.append(exp_str)
+        
+        # Return nearest monthly expiry
+        if monthly_expiries:
+            return min(monthly_expiries)
+        else:
+            # Fallback to nearest future expiry
+            return min(future_expiries)
+    
+    else:  # weekly
+        if expiry_day is None:
+            return min(future_expiries)
+        
+        # Find next weekly expiry on specific day
+        for exp_str in future_expiries:
+            exp_date = datetime.strptime(exp_str, '%Y-%m-%d').date()
+            if exp_date.weekday() == expiry_day:
+                return exp_str
+        
+        return min(future_expiries)
 
 def get_option_chain(instrument_key, expiry):
-    """Get option chain data with Greeks"""
+    """Get option chain data"""
     stats["total_api_calls"] += 1
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
@@ -215,22 +262,22 @@ def split_30min_to_5min(candle_30min):
             current_close = close_price
         
         candles_5min.append([
-            ts, current_open, current_high, current_low, 
+            ts, current_open, current_high, current_low,
             current_close, vol_per_candle, oi
         ])
     
     return candles_5min
 
 def get_live_candles(instrument_key, symbol):
-    """Get historical (30min split) + live (1min aggregated) candles"""
-    stats["total_api_calls"] += 2  # 2 API calls
+    """Get historical + live candles"""
+    stats["total_api_calls"] += 2
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     
     historical_5min = []
     today_5min = []
     
-    # Historical 30min data
+    # Historical
     try:
         to_date = datetime.now(IST)
         from_date = to_date - timedelta(days=10)
@@ -255,9 +302,9 @@ def get_live_candles(instrument_key, symbol):
                         except:
                             pass
     except Exception as e:
-        print(f"  ⚠️ Hist error: {e}")
+        print(f"  ⚠️ Hist: {e}")
     
-    # Today's LIVE 1min data
+    # Today
     try:
         url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
         resp = requests.get(url, headers=headers, timeout=20)
@@ -290,9 +337,8 @@ def get_live_candles(instrument_key, symbol):
                         
                         i += 5
     except Exception as e:
-        print(f"  ⚠️ Today error: {e}")
+        print(f"  ⚠️ Today: {e}")
     
-    # Combine
     all_candles = historical_5min + today_5min
     
     if all_candles:
@@ -303,7 +349,7 @@ def get_live_candles(instrument_key, symbol):
     return [], 0
 
 def create_premium_chart(candles, symbol, spot_price, hist_count):
-    """Create enhanced chart with historical/live distinction"""
+    """Create chart"""
     if not candles or len(candles) < 10:
         return None
     
@@ -335,7 +381,6 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     if len(data) < 10:
         return None
     
-    # Create figure - WIDER
     fig, axes = plt.subplots(2, 1, figsize=(28, 13),
                              gridspec_kw={'height_ratios': [4, 1]},
                              facecolor='#0e1217')
@@ -344,10 +389,8 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     ax1.set_facecolor('#0e1217')
     ax2.set_facecolor('#0e1217')
     
-    # Calculate today
     today_start = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
     
-    # Plot candlesticks - BRIGHTER historical
     for idx in range(len(data)):
         row = data[idx]
         x = idx
@@ -355,15 +398,13 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
         is_bullish = row['close'] >= row['open']
         is_today = row['timestamp'] >= today_start
         
-        alpha = 1.0 if is_today else 0.85  # Brighter historical
+        alpha = 1.0 if is_today else 0.85
         body_color = '#26a69a' if is_bullish else '#ef5350'
         
-        # Wick
         ax1.plot([x, x], [row['low'], row['high']],
                 color=body_color, linewidth=1.5, solid_capstyle='round',
                 alpha=alpha, zorder=2)
         
-        # Body
         body_height = abs(row['close'] - row['open'])
         body_bottom = min(row['open'], row['close'])
         
@@ -376,7 +417,6 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
             ax1.plot([x - 0.4, x + 0.4], [row['open'], row['open']],
                     color=body_color, linewidth=2, alpha=alpha, zorder=3)
     
-    # Today marker
     today_idx = None
     for i, d in enumerate(data):
         if d['timestamp'] >= today_start:
@@ -390,13 +430,12 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
                    linewidth=2, alpha=0.5, zorder=1)
         
         y_pos = ax1.get_ylim()[1] * 0.98
-        ax1.text(today_idx, y_pos, ' TODAY ', 
+        ax1.text(today_idx, y_pos, ' TODAY ',
                 color='#ffa726', fontsize=10, fontweight='bold',
                 bbox=dict(boxstyle='round,pad=0.4', facecolor='#0e1217',
                          edgecolor='#ffa726', linewidth=1.5),
                 verticalalignment='top', zorder=5)
     
-    # Current price
     ax1.axhline(y=spot_price, color='#2962ff', linestyle='--',
                linewidth=2.5, alpha=0.9, zorder=4)
     
@@ -410,27 +449,24 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     ax1_right.tick_params(colors='#2962ff', length=0, pad=10)
     ax1_right.set_facecolor('#0e1217')
     
-    # Styling
     ax1.set_ylabel('Price (₹)', color='#b2b5be', fontsize=13, fontweight='600')
     ax1.tick_params(axis='y', colors='#787b86', labelsize=11, width=0)
     ax1.tick_params(axis='x', colors='#787b86', labelsize=11, width=0)
     ax1.grid(True, alpha=0.12, color='#363a45', linestyle='-', linewidth=0.8)
     ax1.set_axisbelow(True)
     
-    # Title
     now_str = datetime.now(IST).strftime('%d %b %Y • %I:%M:%S %p IST')
     title = f'{symbol}  •  5 Min Chart (LIVE)  •  {now_str}'
     ax1.set_title(title, color='#d1d4dc', fontsize=17, fontweight='700',
                  pad=25, loc='left')
     
-    # Volume - BRIGHTER
     volumes = [d['volume'] for d in data]
     colors_vol = []
     for i in range(len(data)):
         is_bull = data[i]['close'] >= data[i]['open']
         is_today = data[i]['timestamp'] >= today_start
         color = '#26a69a' if is_bull else '#ef5350'
-        alpha_vol = 1.0 if is_today else 0.75  # Brighter
+        alpha_vol = 1.0 if is_today else 0.75
         colors_vol.append((matplotlib.colors.to_rgba(color, alpha=alpha_vol)))
     
     ax2.bar(range(len(volumes)), volumes, color=colors_vol,
@@ -442,7 +478,6 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     ax2.grid(True, alpha=0.12, color='#363a45', linestyle='-', linewidth=0.8)
     ax2.set_axisbelow(True)
     
-    # X-axis
     step = max(1, len(data) // 12)
     tick_positions = list(range(0, len(data), step))
     tick_labels = [data[i]['timestamp'].strftime('%d %b\n%H:%M') for i in tick_positions]
@@ -474,8 +509,8 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     
     return buf
 
-def format_option_chain_message(symbol, spot, expiry, strikes):
-    """Format COMPACT option chain for faster sending"""
+def format_option_chain_message(symbol, spot, expiry, strikes, expiry_type):
+    """Format compact option chain"""
     if not strikes:
         return None
     
@@ -485,8 +520,10 @@ def format_option_chain_message(symbol, spot, expiry, strikes):
     end = min(len(strikes), atm_index + 6)
     selected = strikes[start:end]
     
+    exp_label = "📅 Weekly" if expiry_type == "weekly" else "📅 Monthly"
+    
     msg = f"📊 *{symbol}*\n"
-    msg += f"💰 ₹{spot:,.2f} | 📅 {expiry}\n\n```\n"
+    msg += f"💰 ₹{spot:,.2f} | {exp_label}: {expiry}\n\n```\n"
     msg += "Strike  CE-LTP PE-LTP\n"
     msg += "━━━━━━━━━━━━━━━━━━━━\n"
     
@@ -515,188 +552,13 @@ def format_option_chain_message(symbol, spot, expiry, strikes):
     
     return msg
 
-async def send_daily_summary():
-    """Send 3:30 PM daily summary"""
-    msg = f"📊 *DAILY SUMMARY* 📊\n"
-    msg += f"🕒 {datetime.now(IST).strftime('%d %b %Y - %I:%M %p')}\n\n"
-    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"📈 *INDICES:* {stats['indices_success']} processed\n"
-    msg += f"📊 *STOCKS:* {stats['stocks_success']} processed\n"
-    msg += f"🔄 *TOTAL RUNS:* {stats['total_runs']}\n"
-    msg += f"📡 *API CALLS:* {stats['total_api_calls']}\n"
-    msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-    
-    # Calculate alerts per 5min
-    total_alerts = stats['indices_success'] + stats['stocks_success']
-    alerts_per_run = total_alerts / stats['total_runs'] if stats['total_runs'] > 0 else 0
-    
-    msg += f"⚡ *Alerts per 5min:* {alerts_per_run:.1f}\n"
-    msg += f"📊 *Total Alerts Today:* {total_alerts}\n\n"
-    
-    # Rate limit warning
-    if stats['total_api_calls'] > 5000:
-        msg += f"⚠️ *HIGH API USAGE*\n"
-        msg += f"Consider reducing frequency\n\n"
-    
-    msg += f"✅ Monitoring completed successfully!"
-    
-    await send_telegram_text(msg)
-    print("\n📊 DAILY SUMMARY SENT")
-
-async def check_and_send_summary():
-    """Check if 3:30 PM and send summary"""
-    now = datetime.now(IST)
-    
-    # Reset daily flag at midnight
-    if now.hour == 0 and now.minute < 5:
-        stats["daily_summary_sent"] = False
-    
-    # Send at 3:30 PM once
-    if now.hour == 15 and now.minute >= 30 and now.minute < 35:
-        if not stats["daily_summary_sent"]:
-            await send_daily_summary()
-            stats["daily_summary_sent"] = True
-
-async def fetch_all():
-    """Main fetch function with rate limit management"""
-    print("\n" + "="*60)
-    print(f"🚀 RUN #{stats['total_runs'] + 1}: {datetime.now(IST).strftime('%I:%M:%S %p')}")
-    print("="*60)
-    
-    stats["total_runs"] += 1
-    stats["indices_success"] = 0
-    stats["stocks_success"] = 0
-    
-    # Process INDICES
-    print("\n📊 PROCESSING INDICES...")
-    for idx_key, idx_info in INDICES.items():
-        await process_index(idx_key, idx_info)
-        await asyncio.sleep(2)  # Rate limit protection
-    
-    # Process STOCKS (batch by batch)
-    print("\n📈 PROCESSING STOCKS...")
-    total_stocks = len(NIFTY50_STOCKS)
-    
-    for idx, (key, symbol) in enumerate(NIFTY50_STOCKS.items(), 1):
-        await process_stock(key, symbol, idx, total_stocks)
-        
-        # Longer delay every 10 stocks
-        if idx % 10 == 0:
-            print(f"  ⏸️ Cooldown after {idx} stocks...")
-            await asyncio.sleep(5)
-        else:
-            await asyncio.sleep(1.5)
-    
-    # Check for daily summary
-    await check_and_send_summary()
-    
-    # Summary
-    total_success = stats["indices_success"] + stats["stocks_success"]
-    total_items = len(INDICES) + len(NIFTY50_STOCKS)
-    
-    summary = f"✅ *RUN #{stats['total_runs']} COMPLETE*\n"
-    summary += f"📊 Indices: {stats['indices_success']}/{len(INDICES)}\n"
-    summary += f"📈 Stocks: {stats['stocks_success']}/{len(NIFTY50_STOCKS)}\n"
-    summary += f"📡 API Calls: {stats['total_api_calls']}\n"
-    summary += f"⏰ Next: {(datetime.now(IST) + timedelta(minutes=5)).strftime('%I:%M %p')}"
-    
-    await send_telegram_text(summary)
-    
-    print(f"\n✅ DONE: {total_success}/{total_items} | API: {stats['total_api_calls']}")
-
-async def monitoring_loop():
-    """Main monitoring loop"""
-    print("\n🔄 MONITORING STARTED (5 min interval)\n")
-    print(f"📊 Tracking: {len(INDICES)} Indices + {len(NIFTY50_STOCKS)} Stocks")
-    print(f"⚠️ Rate Limit Protection: ON")
-    print(f"🕒 Daily Summary: 3:30 PM\n")
-    
-    while True:
-        try:
-            # Check market hours (9:15 AM - 3:30 PM)
-            now = datetime.now(IST)
-            hour, minute = now.hour, now.minute
-            
-            # Run only during market hours
-            if (hour > 9 or (hour == 9 and minute >= 15)) and \
-               (hour < 15 or (hour == 15 and minute <= 30)):
-                
-                await fetch_all()
-                
-                # Wait 5 minutes
-                next_time = (datetime.now(IST) + timedelta(minutes=5)).strftime('%I:%M %p')
-                print(f"\n⏳ Next run: {next_time}")
-                await asyncio.sleep(300)
-            
-            else:
-                # Outside market hours
-                print(f"\n🌙 Market closed. Waiting...")
-                
-                # Send daily summary if not sent
-                if hour >= 15 and hour < 16:
-                    await check_and_send_summary()
-                
-                # Wait 30 minutes when market closed
-                await asyncio.sleep(1800)
-            
-        except KeyboardInterrupt:
-            print("\n🛑 Stopped by user")
-            break
-        except Exception as e:
-            print(f"\n❌ Loop error: {e}")
-            await asyncio.sleep(60)
-
-async def main():
-    """Entry point"""
-    print("\n" + "="*70)
-    print("COMPLETE MARKET MONITOR - ALL INDICES + ALL STOCKS")
-    print("="*70)
-    print(f"📊 INDICES ({len(INDICES)}):")
-    for idx_key, idx_info in INDICES.items():
-        print(f"   • {idx_info['name']} ({idx_info['type']})")
-    
-    print(f"\n📈 STOCKS ({len(NIFTY50_STOCKS)}):")
-    print(f"   • All NIFTY 50 constituents + POONAWALLA")
-    
-    print("\n" + "="*70)
-    print("✨ FEATURES:")
-    print("   • 5-minute interval updates")
-    print("   • Historical 30min → 5min split")
-    print("   • Today's 1min → 5min aggregation")
-    print("   • Compact option chain messages")
-    print("   • Charts (reduced frequency)")
-    print("   • 3:30 PM daily summary")
-    print("   • Rate limit protection")
-    print("   • Market hours detection")
-    print("="*70)
-    
-    # Rate limit info
-    print("\n⚠️ RATE LIMIT MANAGEMENT:")
-    print(f"   • API calls per run: ~{len(INDICES) * 4 + len(NIFTY50_STOCKS) * 4}")
-    print(f"   • Daily API calls: ~{(len(INDICES) + len(NIFTY50_STOCKS)) * 4 * 72}")
-    print(f"   • Delays: 2s (indices), 1.5s (stocks), 5s (every 10 stocks)")
-    print(f"   • Charts: Reduced frequency to save bandwidth")
-    print("="*70 + "\n")
-    
-    # Ask user confirmation
-    print("⚠️ IMPORTANT:")
-    print("   • This will send MANY Telegram messages")
-    print(f"   • ~{len(INDICES) + len(NIFTY50_STOCKS)} messages per 5-min cycle")
-    print("   • ~10,000+ API calls per day")
-    print("   • Check your Upstox API limits!")
-    print("\n🟢 Starting in 5 seconds...\n")
-    
-    await asyncio.sleep(5)
-    await monitoring_loop()
-
-if __name__ == "__main__":
-    asyncio.run(main()) send_telegram_text(msg):
+async def send_telegram_text(msg):
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
         await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode='Markdown')
         return True
     except Exception as e:
-        print(f"TG error: {e}")
+        print(f"TG: {e}")
         return False
 
 async def send_telegram_photo(photo_buf, caption):
@@ -706,18 +568,23 @@ async def send_telegram_photo(photo_buf, caption):
                            caption=caption, parse_mode='Markdown')
         return True
     except Exception as e:
-        print(f"Photo error: {e}")
         return False
 
 async def process_index(index_key, index_info):
-    """Process single index"""
+    """Process index"""
     name = index_info["name"]
-    print(f"\n📊 {name}")
+    expiry_type = index_info["expiry_type"]
+    expiry_day = index_info["expiry_day"]
+    
+    print(f"\n📊 {name} ({expiry_type.upper()})")
     
     try:
-        expiry = get_next_expiry(index_key, expiry_day=index_info["expiry_day"])
-        spot = get_spot_price(index_key)
+        expiry = get_nearest_expiry(index_key, expiry_type, expiry_day)
+        if not expiry:
+            print("  ❌ No expiry")
+            return False
         
+        spot = get_spot_price(index_key)
         if spot == 0:
             return False
         
@@ -725,19 +592,16 @@ async def process_index(index_key, index_info):
         if not strikes:
             return False
         
-        # Compact message
-        msg = format_option_chain_message(name, spot, expiry, strikes)
+        msg = format_option_chain_message(name, spot, expiry, strikes, expiry_type)
         if msg:
             await send_telegram_text(msg)
         
-        # Chart (every other run to reduce load)
         if stats["total_runs"] % 2 == 0:
-            candles, hist_count = get_live_candles(index_key, name)
+            candles, _ = get_live_candles(index_key, name)
             if candles and len(candles) >= 10:
-                chart = create_premium_chart(candles, name, spot, hist_count)
+                chart = create_premium_chart(candles, name, spot, 0)
                 if chart:
-                    caption = f"📈 *{name}*\n₹{spot:.2f}"
-                    await send_telegram_photo(chart, caption)
+                    await send_telegram_photo(chart, f"📈 *{name}*\n₹{spot:.2f}")
         
         stats["indices_success"] += 1
         return True
@@ -747,13 +611,15 @@ async def process_index(index_key, index_info):
         return False
 
 async def process_stock(key, symbol, idx, total):
-    """Process single stock"""
+    """Process stock"""
     print(f"  [{idx}/{total}] {symbol}")
     
     try:
-        expiry = get_next_expiry(key, expiry_day=3)
-        spot = get_spot_price(key)
+        expiry = get_nearest_expiry(key, "monthly", None)
+        if not expiry:
+            return False
         
+        spot = get_spot_price(key)
         if spot == 0:
             return False
         
@@ -761,12 +627,10 @@ async def process_stock(key, symbol, idx, total):
         if not strikes:
             return False
         
-        # Compact message only
-        msg = format_option_chain_message(symbol, spot, expiry, strikes)
+        msg = format_option_chain_message(symbol, spot, expiry, strikes, "monthly")
         if msg:
             await send_telegram_text(msg)
         
-        # Chart only every 3rd run (reduce load)
         if idx % 3 == 0:
             candles, _ = get_live_candles(key, symbol)
             if candles and len(candles) >= 10:
@@ -780,4 +644,133 @@ async def process_stock(key, symbol, idx, total):
     except Exception as e:
         return False
 
-async def
+async def send_daily_summary():
+    """Send 3:30 PM summary"""
+    msg = f"📊 *DAILY SUMMARY*\n"
+    msg += f"🕒 {datetime.now(IST).strftime('%d %b - %I:%M %p')}\n\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📈 Indices: {stats['indices_success']}\n"
+    msg += f"📊 Stocks: {stats['stocks_success']}\n"
+    msg += f"🔄 Runs: {stats['total_runs']}\n"
+    msg += f"📡 API: {stats['total_api_calls']}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    total_alerts = stats['indices_success'] + stats['stocks_success']
+    alerts_per_run = total_alerts / stats['total_runs'] if stats['total_runs'] > 0 else 0
+    
+    msg += f"⚡ Alerts/5min: {alerts_per_run:.1f}\n"
+    msg += f"📊 Total Alerts: {total_alerts}\n\n"
+    
+    if stats['total_api_calls'] > 5000:
+        msg += f"⚠️ HIGH API USAGE\n\n"
+    
+    msg += f"✅ Completed!"
+    
+    await send_telegram_text(msg)
+
+async def check_and_send_summary():
+    """Check time and send summary"""
+    now = datetime.now(IST)
+    
+    if now.hour == 0 and now.minute < 5:
+        stats["daily_summary_sent"] = False
+    
+    if now.hour == 15 and now.minute >= 30 and now.minute < 35:
+        if not stats["daily_summary_sent"]:
+            await send_daily_summary()
+            stats["daily_summary_sent"] = True
+
+async def fetch_all():
+    """Main fetch"""
+    print("\n" + "="*60)
+    print(f"🚀 RUN #{stats['total_runs'] + 1}: {datetime.now(IST).strftime('%I:%M:%S %p')}")
+    print("="*60)
+    
+    stats["total_runs"] += 1
+    stats["indices_success"] = 0
+    stats["stocks_success"] = 0
+    
+    print("\n📊 INDICES...")
+    for idx_key, idx_info in INDICES.items():
+        await process_index(idx_key, idx_info)
+        await asyncio.sleep(2)
+    
+    print("\n📈 STOCKS...")
+    total_stocks = len(NIFTY50_STOCKS)
+    
+    for idx, (key, symbol) in enumerate(NIFTY50_STOCKS.items(), 1):
+        await process_stock(key, symbol, idx, total_stocks)
+        
+        if idx % 10 == 0:
+            await asyncio.sleep(5)
+        else:
+            await asyncio.sleep(1.5)
+    
+    await check_and_send_summary()
+    
+    summary = f"✅ *RUN #{stats['total_runs']}*\n"
+    summary += f"📊 Idx: {stats['indices_success']}/{len(INDICES)}\n"
+    summary += f"📈 Stk: {stats['stocks_success']}/{len(NIFTY50_STOCKS)}\n"
+    summary += f"📡 API: {stats['total_api_calls']}"
+    
+    await send_telegram_text(summary)
+
+async def monitoring_loop():
+    """Main loop"""
+    print("\n🔄 MONITORING STARTED\n")
+    
+    while True:
+        try:
+            now = datetime.now(IST)
+            hour, minute = now.hour, now.minute
+            
+            if (hour > 9 or (hour == 9 and minute >= 15)) and \
+               (hour < 15 or (hour == 15 and minute <= 30)):
+                
+                await fetch_all()
+                await asyncio.sleep(300)
+            
+            else:
+                print(f"\n🌙 Market closed")
+                
+                if hour >= 15 and hour < 16:
+                    await check_and_send_summary()
+                
+                await asyncio.sleep(1800)
+            
+        except KeyboardInterrupt:
+            print("\n🛑 Stopped")
+            break
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            await asyncio.sleep(60)
+
+async def main():
+    """Entry point"""
+    print("\n" + "="*70)
+    print("MARKET MONITOR - FIXED EXPIRY SELECTION")
+    print("="*70)
+    print(f"📊 INDICES ({len(INDICES)}):")
+    for idx_key, idx_info in INDICES.items():
+        exp_type = idx_info['expiry_type'].upper()
+        print(f"   • {idx_info['name']} - {exp_type}")
+    
+    print(f"\n📈 STOCKS ({len(NIFTY50_STOCKS)}):")
+    print(f"   • All NIFTY 50 + POONAWALLA - MONTHLY")
+    
+    print("\n" + "="*70)
+    print("✨ FEATURES:")
+    print("   • Auto nearest expiry selection")
+    print("   • Weekly: NIFTY (Tue), SENSEX (Thu)")
+    print("   • Monthly: BANKNIFTY, FINNIFTY, MIDCPNIFTY")
+    print("   • 5-min updates with charts")
+    print("   • 3:30 PM daily summary")
+    print("   • Rate limit protection")
+    print("="*70 + "\n")
+    
+    print("🟢 Starting in 3 seconds...\n")
+    await asyncio.sleep(3)
+    await monitoring_loop()
+
+if __name__ == "__main__":
+    asyncio.run(main())
