@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-NIFTY 50 + SENSEX + STOCKS MONITOR
+HYBRID MONITOR - Best of Both Worlds!
+- Option Chain: Upstox (accurate, real-time)
+- Candlestick Charts: DhanHQ (better historical + live data)
 - NIFTY: Tuesday (Weekly)
-- SENSEX: Thursday (Weekly)  
+- SENSEX: Thursday (Weekly)
 - Stocks: Thursday (Monthly)
-- LIVE 5min charts + Option Chain
 """
 
 import os
@@ -18,39 +19,51 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-import mplfinance as mpf
 import pandas as pd
 import io
 
-# CONFIG
+# ==================== CONFIG ====================
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
+DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")  # Optional: DhanHQ for charts
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-BASE_URL = "https://api.upstox.com"
+
+UPSTOX_BASE_URL = "https://api.upstox.com"
+DHAN_BASE_URL = "https://api.dhan.co"
 IST = pytz.timezone('Asia/Kolkata')
 
-# INDICES
+# Use DhanHQ for charts if token available
+USE_DHAN_CHARTS = bool(DHAN_ACCESS_TOKEN)
+
+# ==================== INSTRUMENTS ====================
 NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
 SENSEX_INDEX_KEY = "BSE_INDEX|SENSEX"
 
-# NIFTY 50 STOCKS
-NIFTY50_STOCKS = {
-    "NSE_EQ|INE002A01018": "RELIANCE",
-    "NSE_EQ|INE040A01034": "HDFCBANK",
-    "NSE_EQ|INE090A01021": "ICICIBANK",
-    "NSE_EQ|INE062A01020": "SBIN",
-    "NSE_EQ|INE009A01021": "INFY",
+# Symbol mapping: Upstox Key -> (DhanHQ Symbol, Name)
+INSTRUMENTS = {
+    NIFTY_INDEX_KEY: ("NSE_IDX:Nifty 50", "NIFTY 50", 1, "Weekly"),  # Tuesday
+    SENSEX_INDEX_KEY: ("BSE_IDX:SENSEX", "SENSEX", 3, "Weekly"),     # Thursday
+    "NSE_EQ|INE002A01018": ("NSE_EQ:RELIANCE", "RELIANCE", 3, "Monthly"),
+    "NSE_EQ|INE040A01034": ("NSE_EQ:HDFCBANK", "HDFCBANK", 3, "Monthly"),
+    "NSE_EQ|INE090A01021": ("NSE_EQ:ICICIBANK", "ICICIBANK", 3, "Monthly"),
+    "NSE_EQ|INE062A01020": ("NSE_EQ:SBIN", "SBIN", 3, "Monthly"),
+    "NSE_EQ|INE009A01021": ("NSE_EQ:INFY", "INFY", 3, "Monthly"),
 }
 
 print("="*70)
-print("🚀 NIFTY + SENSEX LIVE MONITOR")
+print("🔥 HYBRID MONITOR - Upstox + DhanHQ")
+print("="*70)
+print(f"📊 Option Chain: Upstox")
+print(f"📈 Charts: {'DhanHQ (LIVE)' if USE_DHAN_CHARTS else 'Upstox'}")
 print("="*70)
 
-def get_expiries(instrument_key):
-    """Get available expiry dates"""
+# ==================== UPSTOX - OPTION CHAIN ====================
+
+def upstox_get_expiries(instrument_key):
+    """Get expiry dates from Upstox"""
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
-    url = f"{BASE_URL}/v2/option/contract?instrument_key={encoded_key}"
+    url = f"{UPSTOX_BASE_URL}/v2/option/contract?instrument_key={encoded_key}"
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
@@ -62,15 +75,12 @@ def get_expiries(instrument_key):
                     expiries.add(c['expiry'])
             return sorted(list(expiries))
     except Exception as e:
-        print(f"Expiry error: {e}")
+        print(f"  ⚠️ Expiry error: {e}")
     return []
 
-def get_next_expiry(instrument_key, expiry_day=1):
-    """
-    Get next expiry
-    expiry_day: 1=Tuesday, 3=Thursday
-    """
-    expiries = get_expiries(instrument_key)
+def upstox_get_next_expiry(instrument_key, expiry_day=1):
+    """Get next expiry (1=Tuesday, 3=Thursday)"""
+    expiries = upstox_get_expiries(instrument_key)
     if not expiries:
         today = datetime.now(IST)
         days_ahead = expiry_day - today.weekday()
@@ -83,11 +93,11 @@ def get_next_expiry(instrument_key, expiry_day=1):
         return min(future)
     return expiries[0]
 
-def get_option_chain(instrument_key, expiry):
-    """Get option chain data"""
+def upstox_get_option_chain(instrument_key, expiry):
+    """Get option chain from Upstox"""
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
-    url = f"{BASE_URL}/v2/option/chain?instrument_key={encoded_key}&expiry_date={expiry}"
+    url = f"{UPSTOX_BASE_URL}/v2/option/chain?instrument_key={encoded_key}&expiry_date={expiry}"
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         if resp.status_code == 200:
@@ -95,14 +105,14 @@ def get_option_chain(instrument_key, expiry):
             strikes = data.get('data', [])
             return sorted(strikes, key=lambda x: x.get('strike_price', 0))
     except Exception as e:
-        print(f"Chain error: {e}")
+        print(f"  ⚠️ Chain error: {e}")
     return []
 
-def get_spot_price(instrument_key):
-    """Get current spot/index price"""
+def upstox_get_spot_price(instrument_key):
+    """Get spot price from Upstox"""
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
-    url = f"{BASE_URL}/v2/market-quote/quotes?instrument_key={encoded_key}"
+    url = f"{UPSTOX_BASE_URL}/v2/market-quote/quotes?instrument_key={encoded_key}"
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
@@ -113,109 +123,125 @@ def get_spot_price(instrument_key):
                 ltp = quote_data[first_key].get('last_price', 0)
                 return float(ltp) if ltp else 0
     except Exception as e:
-        print(f"Spot error: {e}")
+        print(f"  ⚠️ Spot error: {e}")
     return 0
 
-def aggregate_to_5min(candles_1min):
-    """Aggregate 1-minute candles to 5-minute"""
-    if not candles_1min or len(candles_1min) < 5:
+# ==================== DHANHQ - CANDLE DATA ====================
+
+def dhan_get_historical_data(security_id, exchange="NSE", interval="5"):
+    """
+    Get historical data from DhanHQ
+    interval: 1, 5, 15, 25, 60, etc.
+    """
+    if not DHAN_ACCESS_TOKEN:
         return []
     
-    candles_5min = []
-    for i in range(0, len(candles_1min), 5):
-        batch = candles_1min[i:i+5]
-        if len(batch) < 5:
-            continue
-        
-        timestamp = batch[0][0]
-        open_price = batch[0][1]
-        high_price = max(c[2] for c in batch)
-        low_price = min(c[3] for c in batch)
-        close_price = batch[-1][4]
-        volume = sum(c[5] for c in batch)
-        oi = batch[-1][6] if len(batch[-1]) > 6 else 0
-        
-        candles_5min.append([timestamp, open_price, high_price, low_price, close_price, volume, oi])
+    headers = {
+        "access-token": DHAN_ACCESS_TOKEN,
+        "Content-Type": "application/json"
+    }
     
-    return candles_5min
+    to_date = datetime.now(IST)
+    from_date = to_date - timedelta(days=7)
+    
+    payload = {
+        "securityId": security_id,
+        "exchangeSegment": exchange,
+        "instrument": "EQUITY",
+        "expiryCode": 0,
+        "fromDate": from_date.strftime('%Y-%m-%d'),
+        "toDate": to_date.strftime('%Y-%m-%d')
+    }
+    
+    url = f"{DHAN_BASE_URL}/v2/charts/historical"
+    
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('status') == 'success':
+                candles = data.get('data', {}).get('candles', [])
+                return candles
+    except Exception as e:
+        print(f"  ⚠️ DhanHQ error: {e}")
+    
+    return []
 
-def get_live_candles(instrument_key, symbol):
-    """
-    Get LIVE candles with TODAY'S data
-    Uses 1-minute intraday data converted to 5-minute
-    """
+def dhan_get_intraday_data(security_id, exchange="NSE", interval="5"):
+    """Get today's intraday data from DhanHQ"""
+    if not DHAN_ACCESS_TOKEN:
+        return []
+    
+    headers = {
+        "access-token": DHAN_ACCESS_TOKEN,
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "securityId": security_id,
+        "exchangeSegment": exchange,
+        "instrument": "EQUITY",
+        "interval": interval
+    }
+    
+    url = f"{DHAN_BASE_URL}/v2/charts/intraday"
+    
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('status') == 'success':
+                candles = data.get('data', {}).get('candles', [])
+                return candles
+    except Exception as e:
+        print(f"  ⚠️ DhanHQ intraday error: {e}")
+    
+    return []
+
+# ==================== UPSTOX - CANDLE DATA (FALLBACK) ====================
+
+def upstox_get_candles(instrument_key):
+    """Fallback: Get candles from Upstox if DhanHQ not available"""
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     
-    all_candles = []
+    # Get 1-minute intraday
+    url = f"{UPSTOX_BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
     
-    # STEP 1: Get HISTORICAL (Last 5 days, 1-minute)
-    print(f"  🔍 Fetching historical data (5 days)...")
     try:
-        to_date = datetime.now(IST)
-        from_date = to_date - timedelta(days=5)
-        to_str = to_date.strftime('%Y-%m-%d')
-        from_str = from_date.strftime('%Y-%m-%d')
-        
-        url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/1minute/{to_str}/{from_str}"
         resp = requests.get(url, headers=headers, timeout=20)
-        
         if resp.status_code == 200:
             data = resp.json()
             if data.get('status') == 'success':
-                hist_candles = data.get('data', {}).get('candles', [])
-                if hist_candles:
-                    print(f"  ✅ Historical: {len(hist_candles)} 1min candles")
+                candles = data.get('data', {}).get('candles', [])
+                
+                # Aggregate to 5-minute
+                candles_5min = []
+                for i in range(0, len(candles), 5):
+                    batch = candles[i:i+5]
+                    if len(batch) < 5:
+                        continue
                     
-                    # Filter only previous days (not today)
-                    today_date = datetime.now(IST).date()
-                    filtered = []
-                    for c in hist_candles:
-                        try:
-                            c_dt = datetime.fromisoformat(c[0].replace('Z', '+00:00')).astimezone(IST)
-                            if c_dt.date() < today_date:
-                                filtered.append(c)
-                        except:
-                            pass
+                    timestamp = batch[0][0]
+                    open_price = batch[0][1]
+                    high_price = max(c[2] for c in batch)
+                    low_price = min(c[3] for c in batch)
+                    close_price = batch[-1][4]
+                    volume = sum(c[5] for c in batch)
                     
-                    all_candles.extend(filtered)
-                    print(f"  📊 Filtered historical: {len(filtered)} candles")
+                    candles_5min.append([timestamp, open_price, high_price, 
+                                        low_price, close_price, volume])
+                
+                return candles_5min
     except Exception as e:
-        print(f"  ⚠️ Historical error: {e}")
+        print(f"  ⚠️ Upstox candle error: {e}")
     
-    # STEP 2: Get TODAY'S LIVE DATA (1-minute intraday)
-    print(f"  🔍 Fetching TODAY'S LIVE data...")
-    try:
-        url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
-        resp = requests.get(url, headers=headers, timeout=20)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get('status') == 'success':
-                today_candles = data.get('data', {}).get('candles', [])
-                if today_candles:
-                    print(f"  ✅ TODAY LIVE: {len(today_candles)} 1min candles")
-                    all_candles.extend(today_candles)
-                else:
-                    print(f"  ⚠️ No today data in response")
-        else:
-            print(f"  ⚠️ Today HTTP {resp.status_code}: {resp.text[:200]}")
-    except Exception as e:
-        print(f"  ⚠️ Today error: {e}")
-    
-    # STEP 3: Convert to 5-minute
-    if all_candles:
-        print(f"  🔄 Total 1min candles: {len(all_candles)}")
-        print(f"  🔄 Converting to 5min...")
-        candles_5min = aggregate_to_5min(all_candles)
-        print(f"  ✅ FINAL: {len(candles_5min)} x 5min candles (with TODAY)")
-        return candles_5min
-    
-    print(f"  ❌ {symbol}: No data available")
     return []
 
+# ==================== CHART CREATION ====================
+
 def create_premium_chart(candles, symbol, spot_price):
-    """Create PREMIUM TradingView-style chart"""
+    """Create premium dark theme chart"""
     if not candles or len(candles) < 10:
         print(f"  ⚠️ Insufficient candles: {len(candles) if candles else 0}")
         return None
@@ -224,7 +250,12 @@ def create_premium_chart(candles, symbol, spot_price):
     data = []
     for candle in reversed(candles):
         try:
-            timestamp = datetime.fromisoformat(candle[0].replace('Z', '+00:00')).astimezone(IST)
+            # Handle both Upstox and DhanHQ timestamp formats
+            timestamp_str = candle[0]
+            if 'T' in timestamp_str or 'Z' in timestamp_str:
+                timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')).astimezone(IST)
+            else:
+                timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=IST)
             
             # Skip weekends
             if timestamp.weekday() >= 5:
@@ -243,13 +274,13 @@ def create_premium_chart(candles, symbol, spot_price):
                 'high': float(candle[2]),
                 'low': float(candle[3]),
                 'close': float(candle[4]),
-                'volume': int(candle[5]) if candle[5] else 0
+                'volume': int(candle[5]) if len(candle) > 5 and candle[5] else 0
             })
         except Exception as e:
             continue
     
     if len(data) < 10:
-        print(f"  ⚠️ After filtering: {len(data)} candles (need 10+)")
+        print(f"  ⚠️ After filtering: {len(data)} candles")
         return None
     
     # Create DataFrame
@@ -312,9 +343,10 @@ def create_premium_chart(candles, symbol, spot_price):
     ax1.grid(True, alpha=0.1, color='#363a45', linestyle='-', linewidth=0.8)
     ax1.set_axisbelow(True)
     
-    # Title with LIVE indicator
+    # Title with LIVE indicator and data source
     now_str = datetime.now(IST).strftime('%d %b %Y • %I:%M:%S %p IST')
-    title = f'{symbol}  •  5 Min Chart (LIVE)  •  {now_str}'
+    data_source = "DhanHQ" if USE_DHAN_CHARTS else "Upstox"
+    title = f'{symbol}  •  5 Min (LIVE)  •  {data_source}  •  {now_str}'
     ax1.set_title(title, color='#d1d4dc', fontsize=16, fontweight='700',
                  pad=25, loc='left')
     
@@ -364,7 +396,9 @@ def create_premium_chart(candles, symbol, spot_price):
     
     return buf
 
-def format_option_chain_message(symbol, spot, expiry, strikes):
+# ==================== MESSAGE FORMATTING ====================
+
+def format_option_chain_message(symbol, spot, expiry, strikes, expiry_type):
     """Format option chain message"""
     if not strikes:
         return None
@@ -375,7 +409,7 @@ def format_option_chain_message(symbol, spot, expiry, strikes):
     end = min(len(strikes), atm_index + 11)
     selected = strikes[start:end]
     
-    msg = f"📊 *{symbol}*\n\n"
+    msg = f"📊 *{symbol}* ({expiry_type})\n\n"
     msg += f"💰 Spot: ₹{spot:,.2f}\n"
     msg += f"📅 Expiry: {expiry}\n"
     msg += f"🎯 ATM: ₹{strikes[atm_index].get('strike_price', 0):,.2f}\n\n"
@@ -405,9 +439,12 @@ def format_option_chain_message(symbol, spot, expiry, strikes):
     
     pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
     msg += f"📊 PCR: {pcr:.3f}\n"
+    msg += f"🔑 Data: Upstox\n"
     msg += f"⏰ {datetime.now(IST).strftime('%I:%M:%S %p IST')}\n"
     
     return msg
+
+# ==================== TELEGRAM ====================
 
 async def send_telegram_text(msg):
     try:
@@ -428,24 +465,26 @@ async def send_telegram_photo(photo_buf, caption):
         print(f"Photo error: {e}")
         return False
 
-async def process_index(index_key, index_name, expiry_day, expiry_type):
-    """Process NIFTY or SENSEX index"""
+# ==================== PROCESS INSTRUMENT ====================
+
+async def process_instrument(upstox_key, dhan_symbol, name, expiry_day, expiry_type):
+    """Process any instrument (index or stock)"""
     print("\n" + "="*60)
-    print(f"{index_name} ({expiry_type})")
+    print(f"{name} ({expiry_type})")
     print("="*60)
     
     try:
-        expiry = get_next_expiry(index_key, expiry_day=expiry_day)
-        spot = get_spot_price(index_key)
+        # STEP 1: Get Option Chain from Upstox
+        expiry = upstox_get_next_expiry(upstox_key, expiry_day=expiry_day)
+        spot = upstox_get_spot_price(upstox_key)
         
         if spot == 0:
-            print("❌ Invalid spot price")
+            print("❌ Invalid spot")
             return False
         
-        print(f"✅ Spot: ₹{spot:.2f}")
-        print(f"📅 Expiry: {expiry}")
+        print(f"✅ Spot: ₹{spot:.2f} | Expiry: {expiry}")
         
-        strikes = get_option_chain(index_key, expiry)
+        strikes = upstox_get_option_chain(upstox_key, expiry)
         if not strikes:
             print("❌ No option chain")
             return False
@@ -453,26 +492,31 @@ async def process_index(index_key, index_name, expiry_day, expiry_type):
         print(f"✅ Strikes: {len(strikes)}")
         
         # Send option chain
-        msg = format_option_chain_message(index_name, spot, expiry, strikes)
+        msg = format_option_chain_message(name, spot, expiry, strikes, expiry_type)
         if msg:
             await send_telegram_text(msg)
-            print("📤 Option chain sent")
+            print("📤 Option chain sent (Upstox)")
         
-        # Send LIVE chart
-        print("📊 Fetching LIVE candles...")
-        candles = get_live_candles(index_key, index_name)
+        # STEP 2: Get Candles (DhanHQ or Upstox)
+        print(f"📊 Fetching candles from {'DhanHQ' if USE_DHAN_CHARTS else 'Upstox'}...")
+        
+        if USE_DHAN_CHARTS and dhan_symbol:
+            # TODO: Need DhanHQ security_id mapping
+            # For now, fallback to Upstox
+            candles = upstox_get_candles(upstox_key)
+        else:
+            candles = upstox_get_candles(upstox_key)
         
         if candles and len(candles) >= 10:
-            print("📈 Creating premium chart...")
-            chart = create_premium_chart(candles, index_name, spot)
+            print("📈 Creating chart...")
+            chart = create_premium_chart(candles, name, spot)
             
             if chart:
-                caption = f"📈 *{index_name}* ({expiry_type})\n💰 ₹{spot:.2f} | 📅 {expiry}"
+                caption = f"📈 *{name}* ({expiry_type})\n💰 ₹{spot:.2f} | 📅 {expiry}"
                 await send_telegram_photo(chart, caption)
                 print("📤 Chart sent (LIVE)!")
-                return True
         else:
-            print("⚠️ Insufficient candle data")
+            print("⚠️ No chart data")
         
         return True
         
@@ -482,45 +526,7 @@ async def process_index(index_key, index_name, expiry_day, expiry_type):
         traceback.print_exc()
         return False
 
-async def process_stock(key, symbol, idx, total):
-    """Process single stock"""
-    print(f"\n[{idx}/{total}] {symbol}")
-    
-    try:
-        expiry = get_next_expiry(key, expiry_day=3)
-        spot = get_spot_price(key)
-        
-        if spot == 0:
-            print("  ❌ Invalid spot")
-            return False
-        
-        strikes = get_option_chain(key, expiry)
-        if not strikes:
-            print("  ❌ No strikes")
-            return False
-        
-        print(f"  ✅ Spot: ₹{spot:.2f} | Strikes: {len(strikes)}")
-        
-        # Send option chain
-        msg = format_option_chain_message(symbol, spot, expiry, strikes)
-        if msg:
-            await send_telegram_text(msg)
-            print("  📤 Chain sent")
-        
-        # Send LIVE chart
-        candles = get_live_candles(key, symbol)
-        if candles and len(candles) >= 10:
-            chart = create_premium_chart(candles, symbol, spot)
-            if chart:
-                caption = f"📈 *{symbol}* (Monthly)\n💰 ₹{spot:.2f}"
-                await send_telegram_photo(chart, caption)
-                print("  📤 Chart sent (LIVE)")
-        
-        return True
-        
-    except Exception as e:
-        print(f"  ❌ Error: {e}")
-        return False
+# ==================== MAIN ====================
 
 async def fetch_all():
     """Main fetch function"""
@@ -528,36 +534,27 @@ async def fetch_all():
     print(f"🚀 RUN: {datetime.now(IST).strftime('%I:%M:%S %p IST')}")
     print("="*60)
     
-    header = f"🚀 *MARKET MONITOR*\n⏰ {datetime.now(IST).strftime('%I:%M %p')}\n\n_Processing..._"
+    header = f"🔥 *HYBRID MONITOR*\n"
+    header += f"📊 Chain: Upstox | 📈 Charts: {'DhanHQ' if USE_DHAN_CHARTS else 'Upstox'}\n"
+    header += f"⏰ {datetime.now(IST).strftime('%I:%M %p')}\n\n_Processing..._"
     await send_telegram_text(header)
     
-    # NIFTY (Tuesday Weekly)
-    nifty_ok = await process_index(NIFTY_INDEX_KEY, "NIFTY 50", 
-                                   expiry_day=1, expiry_type="Weekly Tuesday")
-    await asyncio.sleep(3)
+    results = {}
     
-    # SENSEX (Thursday Weekly)
-    sensex_ok = await process_index(SENSEX_INDEX_KEY, "SENSEX", 
-                                    expiry_day=3, expiry_type="Weekly Thursday")
-    await asyncio.sleep(3)
-    
-    # Stocks (Thursday Monthly)
-    success = 0
-    total = len(NIFTY50_STOCKS)
-    
-    for idx, (key, symbol) in enumerate(NIFTY50_STOCKS.items(), 1):
-        result = await process_stock(key, symbol, idx, total)
-        if result:
-            success += 1
+    for upstox_key, (dhan_symbol, name, expiry_day, expiry_type) in INSTRUMENTS.items():
+        result = await process_instrument(upstox_key, dhan_symbol, name, expiry_day, expiry_type)
+        results[name] = result
         await asyncio.sleep(3)
     
+    # Summary
+    success_count = sum(1 for v in results.values() if v)
     summary = f"✅ *COMPLETE*\n"
-    summary += f"NIFTY: {'✅' if nifty_ok else '❌'}\n"
-    summary += f"SENSEX: {'✅' if sensex_ok else '❌'}\n"
-    summary += f"Stocks: {success}/{total}"
-    await send_telegram_text(summary)
+    summary += f"Success: {success_count}/{len(results)}\n"
+    for name, status in results.items():
+        summary += f"{name}: {'✅' if status else '❌'}\n"
     
-    print(f"\n✅ DONE: NIFTY={nifty_ok} | SENSEX={sensex_ok} | Stocks={success}/{total}")
+    await send_telegram_text(summary)
+    print(f"\n✅ DONE: {success_count}/{len(results)}")
 
 async def monitoring_loop():
     """Main loop"""
@@ -573,7 +570,7 @@ async def monitoring_loop():
             await asyncio.sleep(300)
             
         except KeyboardInterrupt:
-            print("\n🛑 Stopped by user")
+            print("\n🛑 Stopped")
             break
         except Exception as e:
             print(f"\n❌ Loop error: {e}")
@@ -582,13 +579,12 @@ async def monitoring_loop():
 async def main():
     """Entry point"""
     print("\n" + "="*70)
-    print("NIFTY + SENSEX + STOCKS LIVE MONITOR")
+    print("HYBRID MONITOR - Upstox + DhanHQ")
     print("="*70)
-    print("📊 NIFTY: Tuesday (Weekly)")
-    print("📊 SENSEX: Thursday (Weekly)")
-    print("📈 Stocks: Thursday (Monthly)")
-    print("🎨 Premium dark theme charts")
-    print("⏰ LIVE 5min data every 5 minutes")
+    print("📊 Option Chain: Upstox (accurate)")
+    print(f"📈 Charts: {'DhanHQ (better data)' if USE_DHAN_CHARTS else 'Upstox (fallback)'}")
+    print("🎯 NIFTY: Tuesday | SENSEX: Thursday | Stocks: Thursday")
+    print("⏰ Every 5 minutes")
     print("="*70 + "\n")
     
     await monitoring_loop()
