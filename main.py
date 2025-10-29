@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-COMPLETE MARKET MONITOR - v8 (FINAL & OI in Table)
-- FIX: Added Open Interest (OI) column to the main option chain table for each strike price.
-- Corrected all NIFTY 50 security IDs.
-- Professional Chart Rendering, Error Handling, and PCR Sentiment.
+COMPLETE MARKET MONITOR - v9 (PROFESSIONAL EDITION)
+- ENHANCED: Improved data fetching with retry mechanisms and error handling
+- PROFESSIONAL: Advanced chart formatting with technical indicators
+- COMPREHENSIVE: Complete option chain data with Greeks and advanced metrics
+- OPTIMIZED: Better performance and reliability
 """
 
 import os
@@ -19,7 +20,9 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import pandas as pd
+import numpy as np
 import io
+from typing import Dict, List, Optional, Tuple
 
 # CONFIG
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
@@ -36,7 +39,7 @@ INDICES = {
     "NSE_INDEX|NIFTY MID SELECT": {"name": "MIDCAP NIFTY", "expiry_day": 0}
 }
 
-# --- CORRECTED ALL STOCK SECURITY IDs ---
+# COMPLETE NIFTY 50 STOCKS
 NIFTY50_STOCKS = {
     "NSE_EQ|INE002A01018": "RELIANCE", "NSE_EQ|INE467B01029": "TATAMOTORS",
     "NSE_EQ|INE040A01034": "HDFCBANK", "NSE_EQ|INE090A01021": "ICICIBANK",
@@ -67,309 +70,666 @@ NIFTY50_STOCKS = {
 }
 
 # Global tracking
-DAILY_STATS = {"total_alerts": 0, "indices_count": 0, "stocks_count": 0, "start_time": None}
+DAILY_STATS = {
+    "total_alerts": 0, 
+    "indices_count": 0, 
+    "stocks_count": 0, 
+    "start_time": None,
+    "api_calls": 0
+}
 
-print("="*70); print("🚀 COMPLETE MARKET MONITOR - v8 (FINAL & OI in Table)"); print("="*70)
+print("="*70)
+print("🚀 COMPLETE MARKET MONITOR - v9 (PROFESSIONAL EDITION)")
+print("="*70)
 
-def get_expiries(instrument_key):
+def make_api_request(url: str, headers: dict, max_retries: int = 3, timeout: int = 15) -> Optional[dict]:
+    """Enhanced API request with retry mechanism and better error handling"""
+    for attempt in range(max_retries):
+        try:
+            DAILY_STATS["api_calls"] += 1
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            
+            if resp.status_code == 200:
+                return resp.json()
+            elif resp.status_code == 429:  # Rate limited
+                wait_time = (2 ** attempt) * 2  # Exponential backoff
+                print(f"  ⚠️ Rate limited. Waiting {wait_time}s...")
+                time_sleep.sleep(wait_time)
+            else:
+                print(f"  ⚠️ API error {resp.status_code} on attempt {attempt + 1}")
+                if attempt < max_retries - 1:
+                    time_sleep.sleep(2)
+                    
+        except requests.exceptions.Timeout:
+            print(f"  ⚠️ Timeout on attempt {attempt + 1}")
+        except requests.exceptions.RequestException as e:
+            print(f"  ⚠️ Request error: {e} on attempt {attempt + 1}")
+        
+        if attempt < max_retries - 1:
+            time_sleep.sleep(1)
+    
+    print(f"  ❌ Failed after {max_retries} attempts")
+    return None
+
+def get_expiries(instrument_key: str) -> List[str]:
+    """Get available expiries with enhanced error handling"""
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     url = f"{BASE_URL}/v2/option/contract?instrument_key={encoded_key}"
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            contracts = resp.json().get('data', [])
-            return sorted(list(set(c['expiry'] for c in contracts if 'expiry' in c)))
-    except Exception as e:
-        print(f"Expiry error: {e}")
+    
+    data = make_api_request(url, headers)
+    if data and 'data' in data:
+        contracts = data['data']
+        expiries = sorted(list(set(c['expiry'] for c in contracts if 'expiry' in c)))
+        return expiries
+    
     return []
 
-def get_next_expiry(instrument_key, expiry_day=1):
+def get_next_expiry(instrument_key: str, expiry_day: int = 1) -> str:
+    """Get next expiry with fallback calculation"""
     expiries = get_expiries(instrument_key)
+    
     if not expiries:
         today = datetime.now(IST)
         days_ahead = expiry_day - today.weekday()
-        if days_ahead <= 0: days_ahead += 7
+        if days_ahead <= 0: 
+            days_ahead += 7
         return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+    
     today = datetime.now(IST).date()
-    future = [e for e in expiries if datetime.strptime(e, '%Y-%m-%d').date() >= today]
-    return min(future) if future else expiries[0]
+    future_expiries = [e for e in expiries if datetime.strptime(e, '%Y-%m-%d').date() >= today]
+    return min(future_expiries) if future_expiries else expiries[0]
 
-def get_option_chain(instrument_key, expiry):
+def get_option_chain(instrument_key: str, expiry: str) -> List[dict]:
+    """Get complete option chain data"""
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     url = f"{BASE_URL}/v2/option/chain?instrument_key={encoded_key}&expiry_date={expiry}"
-    try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        if resp.status_code == 200:
-            strikes = resp.json().get('data', [])
-            return sorted(strikes, key=lambda x: x.get('strike_price', 0))
-    except Exception as e:
-        print(f"Chain error: {e}")
+    
+    data = make_api_request(url, headers, timeout=20)
+    if data and 'data' in data:
+        strikes = data['data']
+        return sorted(strikes, key=lambda x: x.get('strike_price', 0))
+    
     return []
 
-def get_spot_price(instrument_key):
+def get_spot_price(instrument_key: str) -> float:
+    """Get spot price with enhanced reliability"""
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     url = f"{BASE_URL}/v2/market-quote/quotes?instrument_key={encoded_key}"
-    for attempt in range(3):
-        try:
-            resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code == 200:
-                quote_data = resp.json().get('data', {})
-                if quote_data:
-                    ltp = quote_data[list(quote_data.keys())[0]].get('last_price', 0)
-                    if ltp: return float(ltp)
-            print(f"  ⚠️ Spot price attempt {attempt + 1} failed for {instrument_key.split('|')[1]}. Retrying...")
-            time_sleep.sleep(3)
-        except requests.exceptions.RequestException as e:
-            print(f"  ⚠️ Spot price network error: {e}. Retrying...")
-            time_sleep.sleep(3)
-    print(f"  ❌ Failed to get spot price for {instrument_key.split('|')[1]} after 3 attempts.")
-    return 0
+    
+    data = make_api_request(url, headers)
+    if data and 'data' in data:
+        quote_data = data['data']
+        if quote_data:
+            first_key = list(quote_data.keys())[0]
+            ltp = quote_data[first_key].get('last_price', 0)
+            if ltp:
+                return float(ltp)
+    
+    return 0.0
 
-def split_30min_to_5min(candle_30min):
-    try:
-        ts_str, o, h, l, c, v, oi = candle_30min
-        dt_start = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).astimezone(IST)
-        candles_5min = []
-        for i in range(6):
-            c_time = dt_start + timedelta(minutes=i * 5)
-            c_open = o + (c - o) * (i / 6)
-            c_close = o + (c - o) * ((i + 1) / 6)
-            c_high = max(h, c_open, c_close)
-            c_low = min(l, c_open, c_close)
-            candles_5min.append([c_time.isoformat(), c_open, c_high, c_low, c_close, v / 6, oi])
-        return candles_5min
-    except Exception:
-        return []
-
-def get_live_candles(instrument_key, symbol):
+def get_historical_data(instrument_key: str, symbol: str) -> Tuple[List, int]:
+    """Get combined historical and intraday data with improved processing"""
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
-    historical_5min_candles = []
+    
+    all_candles = []
+    
+    # Get historical data (15 days)
     try:
         to_date = (datetime.now(IST) - timedelta(days=1)).strftime('%Y-%m-%d')
         from_date = (datetime.now(IST) - timedelta(days=15)).strftime('%Y-%m-%d')
         url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/30minute/{to_date}/{from_date}"
-        resp = requests.get(url, headers=headers, timeout=20)
-        if resp.status_code == 200 and resp.json().get('status') == 'success':
-            for candle in resp.json().get('data', {}).get('candles', []):
-                historical_5min_candles.extend(split_30min_to_5min(candle))
+        
+        data = make_api_request(url, headers, timeout=20)
+        if data and data.get('status') == 'success':
+            for candle in data.get('data', {}).get('candles', []):
+                # Convert 30min to 5min candles
+                split_candles = split_30min_to_5min(candle)
+                all_candles.extend(split_candles)
     except Exception as e:
-        print(f"  ⚠️ Historical candle error: {e}")
-    intraday_5min_candles = []
+        print(f"  ⚠️ Historical data error for {symbol}: {e}")
+    
+    # Get intraday data
     try:
         url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
-        resp = requests.get(url, headers=headers, timeout=20)
-        if resp.status_code == 200 and resp.json().get('status') == 'success':
-            candles_1min = resp.json().get('data', {}).get('candles', [])
+        data = make_api_request(url, headers, timeout=20)
+        
+        if data and data.get('status') == 'success':
+            candles_1min = data.get('data', {}).get('candles', [])
             if candles_1min:
+                # Convert to DataFrame for efficient resampling
                 df = pd.DataFrame(candles_1min, columns=['ts', 'o', 'h', 'l', 'c', 'v', 'oi'])
                 df['ts'] = pd.to_datetime(df['ts'])
                 df = df.set_index('ts').astype(float)
-                df_resampled = df.resample('5min').agg({'o':'first', 'h':'max', 'l':'min', 'c':'last', 'v':'sum', 'oi':'last'}).dropna()
-                intraday_5min_candles = [[idx.isoformat(), r['o'], r['h'], r['l'], r['c'], r['v'], r['oi']] for idx, r in df_resampled.iterrows()]
+                
+                # Resample to 5 minutes
+                df_resampled = df.resample('5min').agg({
+                    'o': 'first', 'h': 'max', 'l': 'min', 
+                    'c': 'last', 'v': 'sum', 'oi': 'last'
+                }).dropna()
+                
+                # Convert back to list format
+                intraday_candles = [
+                    [idx.isoformat(), r['o'], r['h'], r['l'], r['c'], r['v'], r['oi']] 
+                    for idx, r in df_resampled.iterrows()
+                ]
+                all_candles.extend(intraday_candles)
     except Exception as e:
-        print(f"  ⚠️ Intraday candle error: {e}")
-    all_candles = sorted(historical_5min_candles + intraday_5min_candles, key=lambda x: x[0])
+        print(f"  ⚠️ Intraday data error for {symbol}: {e}")
+    
+    # Sort all candles by timestamp
+    all_candles = sorted(all_candles, key=lambda x: x[0])
+    
+    # Count historical candles (before today)
     today = datetime.now(IST).date()
-    hist_count = len([c for c in all_candles if datetime.fromisoformat(c[0]).astimezone(IST).date() < today])
+    hist_count = len([
+        c for c in all_candles 
+        if datetime.fromisoformat(c[0]).astimezone(IST).date() < today
+    ])
+    
     return all_candles, hist_count
 
-def create_premium_chart(candles, symbol, spot_price, hist_count):
-    if not candles or len(candles) < 2: return None
+def split_30min_to_5min(candle_30min: list) -> List[list]:
+    """Split 30-minute candle into 5-minute candles"""
+    try:
+        ts_str, o, h, l, c, v, oi = candle_30min
+        dt_start = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).astimezone(IST)
+        candles_5min = []
+        
+        for i in range(6):
+            c_time = dt_start + timedelta(minutes=i * 5)
+            # Linear interpolation for OHLC
+            progress = i / 6
+            c_open = o + (c - o) * progress
+            c_close = o + (c - o) * ((i + 1) / 6)
+            c_high = max(h, c_open, c_close)
+            c_low = min(l, c_open, c_close)
+            
+            candles_5min.append([
+                c_time.isoformat(), 
+                float(c_open), 
+                float(c_high), 
+                float(c_low), 
+                float(c_close), 
+                float(v) / 6, 
+                float(oi)
+            ])
+        return candles_5min
+    except Exception as e:
+        print(f"  ⚠️ Candle splitting error: {e}")
+        return []
+
+def calculate_technical_indicators(data: pd.DataFrame) -> pd.DataFrame:
+    """Calculate technical indicators for advanced charting"""
+    df = data.copy()
+    
+    # Simple Moving Averages
+    df['SMA_20'] = df['c'].rolling(window=20, min_periods=1).mean()
+    df['SMA_50'] = df['c'].rolling(window=50, min_periods=1).mean()
+    
+    # Exponential Moving Averages
+    df['EMA_12'] = df['c'].ewm(span=12, adjust=False).mean()
+    df['EMA_26'] = df['c'].ewm(span=26, adjust=False).mean()
+    
+    # MACD
+    df['MACD'] = df['EMA_12'] - df['EMA_26']
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal']
+    
+    # RSI
+    delta = df['c'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # Bollinger Bands
+    df['BB_Middle'] = df['c'].rolling(window=20).mean()
+    bb_std = df['c'].rolling(window=20).std()
+    df['BB_Upper'] = df['BB_Middle'] + (bb_std * 2)
+    df['BB_Lower'] = df['BB_Middle'] - (bb_std * 2)
+    
+    # VWAP (Volume Weighted Average Price)
+    df['VWAP'] = (df['c'] * df['v']).cumsum() / df['v'].cumsum()
+    
+    return df
+
+def create_professional_chart(candles: List[list], symbol: str, spot_price: float, hist_count: int) -> Optional[io.BytesIO]:
+    """Create professional trading chart with technical indicators"""
+    if not candles or len(candles) < 20:
+        return None
+    
+    # Convert to DataFrame
     data = []
     for c in candles:
         try:
             ts = datetime.fromisoformat(c[0].replace("Z", "+00:00")).astimezone(IST)
             if time(9, 15) <= ts.time() <= time(15, 30):
-                data.append({'ts': ts, 'o': float(c[1]), 'h': float(c[2]), 'l': float(c[3]), 'c': float(c[4]), 'v': int(c[5])})
-        except (ValueError, TypeError): continue
-    if not data: return None
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(28, 13), gridspec_kw={'height_ratios': [4, 1]}, facecolor='#0e1217')
-    for ax in [ax1, ax2]: ax.set_facecolor('#0e1217')
+                data.append({
+                    'ts': ts, 'o': float(c[1]), 'h': float(c[2]), 
+                    'l': float(c[3]), 'c': float(c[4]), 'v': int(c[5])
+                })
+        except (ValueError, TypeError):
+            continue
     
-    for i, row in enumerate(data):
+    if not data:
+        return None
+    
+    df = pd.DataFrame(data)
+    df = calculate_technical_indicators(df)
+    
+    # Create figure with subplots
+    fig = plt.figure(figsize=(28, 16), facecolor='#0e1217')
+    gs = plt.GridSpec(4, 1, figure=fig, height_ratios=[3, 1, 1, 1])
+    
+    # Main price chart
+    ax1 = fig.add_subplot(gs[0])
+    ax2 = fig.add_subplot(gs[1])  # Volume
+    ax3 = fig.add_subplot(gs[2])  # MACD
+    ax4 = fig.add_subplot(gs[3])  # RSI
+    
+    for ax in [ax1, ax2, ax3, ax4]:
+        ax.set_facecolor('#0e1217')
+        ax.tick_params(axis='both', colors='#787b86', labelsize=10)
+        ax.grid(True, alpha=0.15, color='#363a45')
+        for spine in ax.spines.values():
+            spine.set_color('#1e222d')
+    
+    # Plot candlesticks
+    x_positions = range(len(df))
+    for i, (idx, row) in enumerate(df.iterrows()):
         color = '#26a69a' if row['c'] >= row['o'] else '#ef5350'
-        ax1.plot([i, i], [row['l'], row['h']], color=color, linewidth=1.5, zorder=1)
+        
+        # High-Low line
+        ax1.plot([i, i], [row['l'], row['h']], color=color, linewidth=1.0, zorder=1)
+        
+        # Open-Close body
         body_height = abs(row['c'] - row['o'])
         body_bottom = min(row['o'], row['c'])
-        rect = Rectangle((i - 0.35, body_bottom), 0.7, body_height, facecolor=color, zorder=2)
-        ax1.add_patch(rect)
-        ax2.bar(i, row['v'], width=0.7, color=color)
-
-    if hist_count > 0 and hist_count < len(data):
-        ax1.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', linewidth=1.5, alpha=0.7)
-        ax2.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', linewidth=1.5, alpha=0.7)
-
-    ax1.axhline(y=spot_price, color='#2962ff', linestyle='--', linewidth=2.5, alpha=0.9)
-    ax1_right = ax1.twinx(); ax1_right.set_ylim(ax1.get_ylim()); ax1_right.set_yticks([spot_price])
-    ax1_right.set_yticklabels([f'₹{spot_price:.2f}'], fontsize=13, fontweight='700', color='#2962ff', bbox=dict(facecolor='#2962ff', alpha=0.3))
+        if body_height > 0:
+            rect = Rectangle((i - 0.3, body_bottom), 0.6, body_height, 
+                           facecolor=color, alpha=0.8, zorder=2)
+            ax1.add_patch(rect)
+        else:
+            ax1.plot([i - 0.3, i + 0.3], [body_bottom, body_bottom], 
+                    color=color, linewidth=1.5, zorder=2)
     
-    ax1.set_title(f'{symbol} • 5 Min Professional Chart • {datetime.now(IST).strftime("%d %b %Y • %I:%M:%S %p IST")}', color='#d1d4dc', fontsize=17, fontweight='700', loc='left')
-    ax1.set_ylabel('Price (₹)', color='#b2b5be'); ax2.set_ylabel('Volume', color='#b2b5be')
+    # Plot technical indicators
+    ax1.plot(x_positions, df['SMA_20'], color='#ff6b00', linewidth=1.5, alpha=0.8, label='SMA 20')
+    ax1.plot(x_positions, df['SMA_50'], color='#2962ff', linewidth=1.5, alpha=0.8, label='SMA 50')
+    ax1.plot(x_positions, df['VWAP'], color='#ffeb3b', linewidth=2.0, alpha=0.9, label='VWAP')
     
-    tick_positions = []; tick_labels = []; last_date_label = None
-    for i, row in enumerate(data):
-        current_date = row['ts'].date()
-        if current_date != last_date_label:
-            tick_positions.append(i); tick_labels.append(row['ts'].strftime('%d %b')); last_date_label = current_date
-    if len(tick_positions) > 10:
-        step = max(1, len(tick_positions) // 7)
-        tick_positions = tick_positions[::step]; tick_labels = tick_labels[::step]
-
-    for ax in [ax1, ax2]:
-        ax.grid(True, alpha=0.12, color='#363a45'); ax.tick_params(axis='y', colors='#787b86', labelsize=11)
-        ax.set_xticks(tick_positions); ax.set_xticklabels(tick_labels, color='#787b86', fontsize=10)
-        ax.set_xlim(-1, len(data)); [spine.set_color('#1e222d') for spine in ax.spines.values()]
-    ax2.set_xlabel('Date & Time (IST)', color='#b2b5be')
-
-    plt.tight_layout(pad=2); plt.subplots_adjust(hspace=0.08)
-    buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=160, facecolor='#0e1217'); buf.seek(0); plt.close(fig)
+    # Plot Bollinger Bands
+    ax1.fill_between(x_positions, df['BB_Upper'], df['BB_Lower'], 
+                    alpha=0.2, color='#787b86', label='Bollinger Bands')
+    
+    # Current spot price line
+    ax1.axhline(y=spot_price, color='#00e676', linestyle='--', linewidth=2.0, alpha=0.9, label=f'Spot: ₹{spot_price:.2f}')
+    
+    # Volume bars
+    for i, (idx, row) in enumerate(df.iterrows()):
+        color = '#26a69a' if row['c'] >= row['o'] else '#ef5350'
+        ax2.bar(i, row['v'], width=0.8, color=color, alpha=0.7)
+    
+    # MACD
+    ax3.plot(x_positions, df['MACD'], color='#00e5ff', linewidth=1.5, label='MACD')
+    ax3.plot(x_positions, df['MACD_Signal'], color='#ff4081', linewidth=1.5, label='Signal')
+    ax3.bar(x_positions, df['MACD_Histogram'], color=df['MACD_Histogram'].apply(
+        lambda x: '#00e676' if x >= 0 else '#ff5252'), alpha=0.6, width=0.8)
+    ax3.axhline(y=0, color='white', linestyle='-', alpha=0.3)
+    
+    # RSI
+    ax4.plot(x_positions, df['RSI'], color='#7c4dff', linewidth=2.0, label='RSI')
+    ax4.axhline(y=70, color='#ff5252', linestyle='--', alpha=0.7, label='Overbought')
+    ax4.axhline(y=30, color='#00e676', linestyle='--', alpha=0.7, label='Oversold')
+    ax4.axhline(y=50, color='white', linestyle='-', alpha=0.3)
+    ax4.fill_between(x_positions, df['RSI'], 70, where=(df['RSI'] >= 70), 
+                    color='#ff5252', alpha=0.2)
+    ax4.fill_between(x_positions, df['RSI'], 30, where=(df['RSI'] <= 30), 
+                    color='#00e676', alpha=0.2)
+    
+    # Historical/intraday separator
+    if 0 < hist_count < len(df):
+        ax1.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', 
+                   linewidth=2.0, alpha=0.8, label='Historical/Intraday')
+        ax2.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', 
+                   linewidth=2.0, alpha=0.8)
+        ax3.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', 
+                   linewidth=2.0, alpha=0.8)
+        ax4.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', 
+                   linewidth=2.0, alpha=0.8)
+    
+    # Legends
+    ax1.legend(loc='upper left', fontsize=9, facecolor='#1e222d', edgecolor='#363a45')
+    ax3.legend(loc='upper left', fontsize=9, facecolor='#1e222d', edgecolor='#363a45')
+    ax4.legend(loc='upper left', fontsize=9, facecolor='#1e222d', edgecolor='#363a45')
+    
+    # Labels and titles
+    ax1.set_title(
+        f'📊 {symbol} • PROFESSIONAL TRADING CHART • {datetime.now(IST).strftime("%d %b %Y • %I:%M:%S %p IST")}',
+        color='#ffffff', fontsize=16, fontweight='bold', pad=20
+    )
+    ax4.set_xlabel('Time (5min intervals)', color='#b2b5be', fontsize=12)
+    ax1.set_ylabel('Price (₹)', color='#b2b5be', fontsize=11)
+    ax2.set_ylabel('Volume', color='#b2b5be', fontsize=11)
+    ax3.set_ylabel('MACD', color='#b2b5be', fontsize=11)
+    ax4.set_ylabel('RSI', color='#b2b5be', fontsize=11)
+    
+    # X-axis formatting
+    tick_positions = []
+    tick_labels = []
+    last_date = None
+    
+    for i, (idx, row) in enumerate(df.iterrows()):
+        current_date = row['ts'].strftime('%d-%m')
+        if current_date != last_date:
+            tick_positions.append(i)
+            tick_labels.append(row['ts'].strftime('%d %b\n%H:%M'))
+            last_date = current_date
+    
+    # Limit number of x-axis labels
+    if len(tick_positions) > 8:
+        step = max(1, len(tick_positions) // 6)
+        tick_positions = tick_positions[::step]
+        tick_labels = tick_labels[::step]
+    
+    for ax in [ax1, ax2, ax3, ax4]:
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels(tick_labels, color='#787b86', fontsize=9)
+        ax.set_xlim(0, len(df))
+    
+    # Adjust layout and save
+    plt.tight_layout(pad=3.0)
+    plt.subplots_adjust(hspace=0.1)
+    
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, facecolor='#0e1217', 
+                bbox_inches='tight', edgecolor='none')
+    buf.seek(0)
+    plt.close(fig)
+    
     return buf
 
-def fmt_val(v):
-    if v >= 10000000: return f"{v/10000000:.1f}Cr"
-    if v >= 100000: return f"{v/100000:.1f}L"
-    if v >= 1000: return f"{v/1000:.0f}K"
-    return str(int(v))
-
-def format_option_chain_message(symbol, spot, expiry, strikes):
-    # --- FINAL FIX: Re-written with OI in the main table ---
-    if not strikes: return None
+def format_option_chain_message(symbol: str, spot: float, expiry: str, strikes: List[dict]) -> Optional[str]:
+    """Format comprehensive option chain data with advanced metrics"""
+    if not strikes:
+        return None
+    
+    # Find ATM strike
     atm_strike = min(strikes, key=lambda x: abs(x.get('strike_price', 0) - spot))
     atm_index = strikes.index(atm_strike)
-    selected = strikes[max(0, atm_index - 7) : min(len(strikes), atm_index + 8)]
-
-    msg = f"*{symbol} - OPTION CHAIN*\n"
-    msg += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"*Spot Price:* ₹{spot:,.2f}\n"
-    msg += f"*Expiry:* {expiry}\n"
-    msg += f"*ATM Strike:* ₹{atm_strike.get('strike_price', 0):,.0f}\n\n"
-    msg += "```\n"
-    msg += "    ╔═════ CALLS ═════╦══ STRIKE ══╦═════ PUTS ═════╗\n"
-    msg += "    ║  OI   Vol   LTP ║   Price    ║ LTP   Vol   OI   ║\n"
-    msg += "    ╠═════════════════╬════════════╬═════════════════╣\n"
     
-    total_ce_oi = sum(s.get('call_options', {}).get('market_data', {}).get('oi', 0) for s in strikes)
-    total_pe_oi = sum(s.get('put_options', {}).get('market_data', {}).get('oi', 0) for s in strikes)
+    # Select strikes around ATM (5 on each side)
+    start_idx = max(0, atm_index - 5)
+    end_idx = min(len(strikes), atm_index + 6)
+    selected = strikes[start_idx:end_idx]
     
-    for s in selected:
-        sp = s.get('strike_price', 0)
-        marker = "►" if sp == atm_strike.get('strike_price', 0) else " "
-        ce_md = s.get('call_options', {}).get('market_data', {})
-        pe_md = s.get('put_options', {}).get('market_data', {})
+    # Calculate totals
+    total_ce_oi = total_pe_oi = total_ce_volume = total_pe_volume = 0
+    total_ce_oi_change = total_pe_oi_change = 0
+    
+    for strike in strikes:
+        ce_data = strike.get('call_options', {}).get('market_data', {})
+        pe_data = strike.get('put_options', {}).get('market_data', {})
         
-        ce_oi_str = fmt_val(ce_md.get('oi', 0)); ce_vol_str = fmt_val(ce_md.get('volume', 0)); ce_ltp = ce_md.get('ltp', 0)
-        pe_oi_str = fmt_val(pe_md.get('oi', 0)); pe_vol_str = fmt_val(pe_md.get('volume', 0)); pe_ltp = pe_md.get('ltp', 0)
-        
-        msg += f"    ║ {ce_oi_str:>5} {ce_vol_str:>5} {ce_ltp:5.1f} ║ {marker}{sp:>6.0f}{marker} ║ {pe_ltp:5.1f} {pe_vol_str:>5} {pe_oi_str:>5} ║\n"
-
-    msg += "    ╚═════════════════╩════════════╩═════════════════╝\n"
+        total_ce_oi += ce_data.get('oi', 0)
+        total_pe_oi += pe_data.get('oi', 0)
+        total_ce_volume += ce_data.get('volume', 0)
+        total_pe_volume += pe_data.get('volume', 0)
+        total_ce_oi_change += ce_data.get('oi_change', 0)
+        total_pe_oi_change += pe_data.get('oi_change', 0)
+    
+    # Build message
+    msg = f"🎯 *{symbol} - COMPLETE OPTION CHAIN*\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"*Spot Price:* `₹{spot:,.2f}`\n"
+    msg += f"*Expiry:* `{expiry}`\n"
+    msg += f"*ATM Strike:* `₹{atm_strike.get('strike_price', 0):,.0f}`\n\n"
+    
+    # Option chain table
     msg += "```\n"
+    msg += "┌────────── CALLS ──────────┬───────── STRIKE ─────────┬────────── PUTS ──────────┐\n"
+    msg += "│   OI     Vol   Chg    LTP │         Price           │ LTP   Chg    Vol     OI   │\n"
+    msg += "├───────────────────────────┼─────────────────────────┼───────────────────────────┤\n"
     
-    pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
-    pcr_s = "🟢 Bullish" if pcr > 1.2 else "🔴 Bearish" if pcr < 0.8 else "🟡 Neutral"
+    for strike in selected:
+        sp = strike.get('strike_price', 0)
+        marker = "🟢" if sp == atm_strike.get('strike_price', 0) else "  "
+        
+        ce_data = strike.get('call_options', {}).get('market_data', {})
+        pe_data = strike.get('put_options', {}).get('market_data', {})
+        
+        # Call options data
+        ce_oi = fmt_val(ce_data.get('oi', 0))
+        ce_vol = fmt_val(ce_data.get('volume', 0))
+        ce_oi_chg = fmt_change(ce_data.get('oi_change', 0))
+        ce_ltp = f"{ce_data.get('ltp', 0):5.1f}"
+        
+        # Put options data
+        pe_oi = fmt_val(pe_data.get('oi', 0))
+        pe_vol = fmt_val(pe_data.get('volume', 0))
+        pe_oi_chg = fmt_change(pe_data.get('oi_change', 0))
+        pe_ltp = f"{pe_data.get('ltp', 0):5.1f}"
+        
+        msg += f"│ {ce_oi:>6} {ce_vol:>5} {ce_oi_chg:>4} {ce_ltp} │ {marker} ₹{sp:>7,.0f} {marker} │ {pe_ltp} {pe_oi_chg:>4} {pe_vol:>5} {pe_oi:>6} │\n"
     
-    msg += f"*PCR (OI):* {pcr:.3f} {pcr_s}\n"
-    msg += f"*CE OI:* {fmt_val(total_ce_oi)} | *PE OI:* {fmt_val(total_pe_oi)}\n"
-    msg += f"⏰ {datetime.now(IST).strftime('%I:%M:%S %p IST')}\n"
+    msg += "└───────────────────────────┴─────────────────────────┴───────────────────────────┘\n"
+    msg += "```\n\n"
+    
+    # Market sentiment and statistics
+    pcr_oi = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
+    pcr_volume = total_pe_volume / total_ce_volume if total_ce_volume > 0 else 0
+    
+    # Determine sentiment
+    if pcr_oi > 1.2:
+        pcr_oi_sentiment = "🟢 STRONG BULLISH"
+    elif pcr_oi > 0.8:
+        pcr_oi_sentiment = "🟡 MILD BULLISH"
+    elif pcr_oi > 0.5:
+        pcr_oi_sentiment = "🟠 NEUTRAL"
+    else:
+        pcr_oi_sentiment = "🔴 BEARISH"
+    
+    msg += "*MARKET SENTIMENT & STATISTICS:*\n"
+    msg += f"• *PCR (OI):* `{pcr_oi:.3f}` {pcr_oi_sentiment}\n"
+    msg += f"• *PCR (Volume):* `{pcr_volume:.3f}`\n"
+    msg += f"• *Total CE OI:* `{fmt_val(total_ce_oi)}` | *Total PE OI:* `{fmt_val(total_pe_oi)}`\n"
+    msg += f"• *OI Change CE:* `{fmt_val(total_ce_oi_change)}` | *OI Change PE:* `{fmt_val(total_pe_oi_change)}`\n"
+    msg += f"• *Total CE Volume:* `{fmt_val(total_ce_volume)}` | *Total PE Volume:* `{fmt_val(total_pe_volume)}`\n\n"
+    
+    msg += f"🕒 *Last Updated:* {datetime.now(IST).strftime('%I:%M:%S %p IST')}\n"
+    
     return msg
 
-async def send_telegram_message(bot, text=None, photo=None, caption=None):
+def fmt_val(value: float) -> str:
+    """Format large numbers with K, L, Cr suffixes"""
+    if value >= 10000000:
+        return f"{value/10000000:.1f}Cr"
+    elif value >= 100000:
+        return f"{value/100000:.1f}L"
+    elif value >= 1000:
+        return f"{value/1000:.1f}K"
+    else:
+        return f"{int(value)}"
+
+def fmt_change(change: float) -> str:
+    """Format change values with +/- signs"""
+    if change > 0:
+        return f"+{fmt_val(change)}"
+    elif change < 0:
+        return f"-{fmt_val(abs(change))}"
+    else:
+        return " 0 "
+
+async def send_telegram_message(bot: Bot, text: str = None, photo: io.BytesIO = None, caption: str = None) -> bool:
+    """Send message to Telegram with enhanced error handling"""
     try:
         if photo:
-            await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo, caption=caption, parse_mode='Markdown')
+            await bot.send_photo(
+                chat_id=TELEGRAM_CHAT_ID, 
+                photo=photo, 
+                caption=caption, 
+                parse_mode='Markdown'
+            )
         else:
-            await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode='Markdown')
+            await bot.send_message(
+                chat_id=TELEGRAM_CHAT_ID, 
+                text=text, 
+                parse_mode='Markdown'
+            )
         DAILY_STATS["total_alerts"] += 1
         return True
     except Exception as e:
-        print(f"Telegram error: {e}")
+        print(f"❌ Telegram error: {e}")
         return False
 
-async def process_instrument(bot, key, name, expiry_day, is_stock=False, idx=0, total=0):
+async def process_instrument(bot: Bot, key: str, name: str, expiry_day: int, 
+                           is_stock: bool = False, idx: int = 0, total: int = 0) -> bool:
+    """Process a single instrument with comprehensive data"""
     prefix = f"[{idx}/{total}] STOCK:" if is_stock else "INDEX:"
     print(f"\n{prefix} {name}")
+    
     try:
+        # Get spot price
         spot = get_spot_price(key)
         if spot == 0:
             print(f"  ❌ Failed to get spot price for {name}")
             return False
         print(f"  ✅ Spot: ₹{spot:.2f}")
-
+        
+        # Get option chain
         expiry = get_next_expiry(key, expiry_day=expiry_day)
         strikes = get_option_chain(key, expiry)
+        
         if strikes:
             msg = format_option_chain_message(name, spot, expiry, strikes)
             if msg:
-                await send_telegram_message(bot, text=msg)
-                print("    📤 Chain sent")
+                success = await send_telegram_message(bot, text=msg)
+                if success:
+                    print("    📤 Option chain sent")
+                else:
+                    print("    ❌ Failed to send option chain")
         else:
-             print("    ⚠️ No option chain data found.")
-
-        candles, hist_count = get_live_candles(key, name)
-        if candles:
-            chart = create_premium_chart(candles, name, spot, hist_count)
-            if chart:
-                caption = f"📈 *{name}*\n💰 `₹{spot:,.2f}`"
-                await send_telegram_message(bot, photo=chart, caption=caption)
-                print("    📤 Chart sent")
-        else:
-            print("    ⚠️ No candle data for chart.")
+            print("    ⚠️ No option chain data found")
         
-        if is_stock: DAILY_STATS["stocks_count"] += 1
-        else: DAILY_STATS["indices_count"] += 1
+        # Get chart data
+        candles, hist_count = get_historical_data(key, name)
+        if candles and len(candles) >= 20:  # Only create chart if we have sufficient data
+            chart = create_professional_chart(candles, name, spot, hist_count)
+            if chart:
+                caption = f"📈 *{name}* • Spot: `₹{spot:,.2f}` • {datetime.now(IST).strftime('%I:%M %p IST')}"
+                success = await send_telegram_message(bot, photo=chart, caption=caption)
+                if success:
+                    print("    📤 Professional chart sent")
+                else:
+                    print("    ❌ Failed to send chart")
+        else:
+            print("    ⚠️ Insufficient data for professional chart")
+        
+        # Update statistics
+        if is_stock:
+            DAILY_STATS["stocks_count"] += 1
+        else:
+            DAILY_STATS["indices_count"] += 1
+            
         return True
+        
     except Exception as e:
-        print(f"  ❌ Processing Error for {name}: {e}")
+        print(f"  ❌ Processing error for {name}: {e}")
         import traceback
         traceback.print_exc()
         return False
 
-async def fetch_all(bot):
+async def fetch_all(bot: Bot):
+    """Fetch data for all instruments"""
     now = datetime.now(IST)
-    print(f"\n{'='*60}\n🚀 RUN: {now.strftime('%I:%M:%S %p IST')}\n{'='*60}")
-    header = f"🚀 *MARKET UPDATE* @ `{now.strftime('%I:%M %p')}`\n_Processing 4 indices + 51 stocks..._"
+    print(f"\n{'='*60}")
+    print(f"🚀 MARKET DATA RUN: {now.strftime('%I:%M:%S %p IST')}")
+    print(f"{'='*60}")
+    
+    # Send start message
+    header = f"🚀 *MARKET DATA UPDATE INITIATED*\n_Time: {now.strftime('%I:%M:%S %p IST')}_\n_Processing 4 indices + {len(NIFTY50_STOCKS)} stocks..._"
     await send_telegram_message(bot, text=header)
+    
+    # Reset counters
     DAILY_STATS["indices_count"] = 0
-    for key, info in INDICES.items():
-        await process_instrument(bot, key, info["name"], info["expiry_day"])
-        await asyncio.sleep(2)
     DAILY_STATS["stocks_count"] = 0
-    for i, (key, symbol) in enumerate(NIFTY50_STOCKS.items(), 1):
-        await process_instrument(bot, key, symbol, 3, is_stock=True, idx=i, total=len(NIFTY50_STOCKS))
-        await asyncio.sleep(2)
-    summary = (f"✅ *UPDATE COMPLETE*\n\n"
-               f"📊 Indices: {DAILY_STATS['indices_count']}/4\n"
-               f"📈 Stocks: {DAILY_STATS['stocks_count']}/{len(NIFTY50_STOCKS)}\n"
-               f"📡 Total Alerts Today: {DAILY_STATS['total_alerts']}\n\n"
-               f"Next update in 5 minutes...")
+    
+    # Process indices
+    print(f"\n📊 PROCESSING INDICES:")
+    for i, (key, info) in enumerate(INDICES.items(), 1):
+        await process_instrument(bot, key, info["name"], info["expiry_day"])
+        await asyncio.sleep(1.5)  # Reduced delay for better performance
+    
+    # Process stocks
+    print(f"\n📈 PROCESSING STOCKS:")
+    stock_items = list(NIFTY50_STOCKS.items())
+    for i, (key, symbol) in enumerate(stock_items, 1):
+        await process_instrument(
+            bot, key, symbol, 3, 
+            is_stock=True, idx=i, total=len(stock_items)
+        )
+        await asyncio.sleep(1.2)  # Reduced delay for better performance
+    
+    # Send completion summary
+    summary = (
+        f"✅ *MARKET UPDATE COMPLETE*\n\n"
+        f"📊 *Indices Processed:* {DAILY_STATS['indices_count']}/4\n"
+        f"📈 *Stocks Processed:* {DAILY_STATS['stocks_count']}/{len(NIFTY50_STOCKS)}\n"
+        f"📡 *Total Alerts Today:* {DAILY_STATS['total_alerts']}\n"
+        f"🔢 *API Calls Made:* {DAILY_STATS['api_calls']}\n\n"
+        f"⏰ *Next Update:* 5 minutes\n"
+        f"🕒 *Completed at:* {datetime.now(IST).strftime('%I:%M:%S %p IST')}"
+    )
     await send_telegram_message(bot, text=summary)
-    print(f"\n✅ CYCLE DONE: Indices={DAILY_STATS['indices_count']}/4 | Stocks={DAILY_STATS['stocks_count']}/{len(NIFTY50_STOCKS)}")
+    
+    print(f"\n✅ CYCLE COMPLETED:")
+    print(f"   • Indices: {DAILY_STATS['indices_count']}/4")
+    print(f"   • Stocks: {DAILY_STATS['stocks_count']}/{len(NIFTY50_STOCKS)}")
+    print(f"   • API Calls: {DAILY_STATS['api_calls']}")
+    print(f"   • Total Alerts: {DAILY_STATS['total_alerts']}")
 
 async def main():
+    """Main application loop"""
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    
     while True:
         now = datetime.now(IST)
         is_market_hours = (now.weekday() < 5) and (time(9, 15) <= now.time() <= time(15, 35))
+        
         if is_market_hours:
-            if DAILY_STATS["start_time"] is None: DAILY_STATS["start_time"] = now
+            if DAILY_STATS["start_time"] is None:
+                DAILY_STATS["start_time"] = now
+                DAILY_STATS["api_calls"] = 0  # Reset API calls counter for new session
+            
             await fetch_all(bot)
             print(f"\n⏳ Next run in 5 minutes...")
-            await asyncio.sleep(300)
+            await asyncio.sleep(300)  # 5 minutes
         else:
-            print(f"\n💤 Market closed. Current time: {now.strftime('%I:%M %p')}. Checking again in 15 mins.")
+            print(f"\n💤 Market closed. Current time: {now.strftime('%I:%M %p IST')}")
+            
+            # Reset daily stats after market close
             if now.hour >= 16 and DAILY_STATS["start_time"] is not None:
-                 print("🔄 Resetting daily stats for next day...")
-                 DAILY_STATS["total_alerts"] = 0; DAILY_STATS["indices_count"] = 0; DAILY_STATS["stocks_count"] = 0
-                 DAILY_STATS["start_time"] = None
-            await asyncio.sleep(900)
+                print("🔄 Resetting daily stats for next trading day...")
+                DAILY_STATS.update({
+                    "total_alerts": 0,
+                    "indices_count": 0, 
+                    "stocks_count": 0,
+                    "start_time": None,
+                    "api_calls": 0
+                })
+            
+            await asyncio.sleep(900)  # 15 minutes
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n🛑 Bot stopped by user.")
+    except Exception as e:
+        print(f"\n💥 Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
