@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# main.py - NIFTY 50 INDEX + STOCKS Option Chain Monitor
+# main.py - NIFTY 50 INDEX + STOCKS Monitor (COMPLETE CODE)
 
 import os
 import asyncio
@@ -8,8 +8,9 @@ import urllib.parse
 from datetime import datetime, timedelta
 import pytz
 from telegram import Bot
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
 import io
 
@@ -21,10 +22,8 @@ BASE_URL = "https://api.upstox.com"
 IST = pytz.timezone('Asia/Kolkata')
 
 # ==================== NIFTY 50 INDEX + STOCKS ====================
-# NIFTY 50 INDEX (Priority #1)
 NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
 
-# NIFTY 50 STOCKS
 NIFTY50_STOCKS = {
     "NSE_EQ|INE002A01018": "RELIANCE",
     "NSE_EQ|INE040A01034": "HDFCBANK",
@@ -66,16 +65,16 @@ NIFTY50_STOCKS = {
 print("\n" + "="*70)
 print("🚀 NIFTY 50 INDEX + STOCKS - UPSTOX MONITOR")
 print("="*70)
-print("📊 NIFTY Index Option Chain (Priority)")
-print("📈 35 Stocks Option Chain + Charts")
-print("⏰ Real-time updates every 5 minutes")
-print("📱 Telegram notifications with charts")
+print("📊 NIFTY Index: Weekly expiry (Every Tuesday)")
+print("📈 35 Stocks: Option Chain + 15min Charts")
+print("⏰ Updates: Every 5 minutes")
+print("📱 Telegram: Real-time alerts with charts")
 print("="*70 + "\n")
 
 # ==================== UPSTOX API FUNCTIONS ====================
 
 def get_expiries(instrument_key):
-    """Get available expiry dates"""
+    """Get available expiry dates from API"""
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
@@ -101,15 +100,23 @@ def get_expiries(instrument_key):
     
     return []
 
-def get_next_expiry(instrument_key):
-    """Get next available expiry (nearest Thursday for NIFTY)"""
+def get_next_expiry(instrument_key, is_nifty_index=False):
+    """Get next expiry - Tuesday for NIFTY Index, Thursday for stocks"""
     expiries = get_expiries(instrument_key)
+    
     if not expiries:
-        # Fallback: Next Thursday
         today = datetime.now(IST)
-        days_ahead = 3 - today.weekday()  # Thursday = 3
-        if days_ahead <= 0:
-            days_ahead += 7
+        if is_nifty_index:
+            # NIFTY expires on Tuesday (1)
+            days_ahead = 1 - today.weekday()
+            if days_ahead <= 0:
+                days_ahead += 7
+        else:
+            # Stocks expire on Thursday (3)
+            days_ahead = 3 - today.weekday()
+            if days_ahead <= 0:
+                days_ahead += 7
+        
         return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
     
     today = datetime.now(IST).date()
@@ -120,7 +127,7 @@ def get_next_expiry(instrument_key):
     return expiries[0]
 
 def get_option_chain(instrument_key, expiry):
-    """Get option chain data with ALL strikes"""
+    """Get option chain data with all strikes"""
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
@@ -134,8 +141,6 @@ def get_option_chain(instrument_key, expiry):
         if resp.status_code == 200:
             data = resp.json()
             strikes = data.get('data', [])
-            
-            # Sort by strike price
             strikes_sorted = sorted(strikes, key=lambda x: x.get('strike_price', 0))
             return strikes_sorted
     except Exception as e:
@@ -168,7 +173,7 @@ def get_spot_price(instrument_key):
     return 0
 
 def split_30min_to_15min(candles_30min):
-    """Split 30-minute candles into 15-minute candles"""
+    """Split 30-minute candles into 15-minute"""
     if not candles_30min:
         return []
     
@@ -188,27 +193,15 @@ def split_30min_to_15min(candles_30min):
         except:
             continue
         
-        # First 15min candle
         candles_15min.append([
-            timestamp,
-            open_price,
-            high_price,
-            low_price,
-            (open_price + close_price) / 2,
-            volume // 2,
-            oi
+            timestamp, open_price, high_price, low_price,
+            (open_price + close_price) / 2, volume // 2, oi
         ])
         
-        # Second 15min candle (15 minutes later)
         dt_next = dt + timedelta(minutes=15)
         candles_15min.append([
-            dt_next.isoformat(),
-            (open_price + close_price) / 2,
-            high_price,
-            low_price,
-            close_price,
-            volume - (volume // 2),
-            oi
+            dt_next.isoformat(), (open_price + close_price) / 2,
+            high_price, low_price, close_price, volume - (volume // 2), oi
         ])
     
     return candles_15min
@@ -240,21 +233,20 @@ def aggregate_1min_to_15min(candles_1min):
     return candles_15min
 
 def get_historical_candles(instrument_key, symbol):
-    """Get historical candle data - Combine INTRADAY + HISTORICAL"""
+    """Get historical candle data"""
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
     }
     
     encoded_key = urllib.parse.quote(instrument_key, safe='')
-    
     today_candles = []
     historical_candles = []
     
-    # Step 1: TODAY'S LIVE data (1-minute intraday)
+    # TODAY'S data
     try:
         url = f"{BASE_URL}/v2/historical-candle/intraday/{encoded_key}/1minute"
-        print(f"  🔍 Fetching 1min intraday (TODAY)...")
+        print(f"  🔍 Fetching today's 1min data...")
         
         resp = requests.get(url, headers=headers, timeout=15)
         
@@ -269,7 +261,7 @@ def get_historical_candles(instrument_key, symbol):
     except Exception as e:
         print(f"  ⚠️ Intraday error: {e}")
     
-    # Step 2: RECENT DAYS data (30-minute historical, last 7 days)
+    # HISTORICAL data (7 days)
     try:
         to_date = datetime.now(IST)
         from_date = to_date - timedelta(days=7)
@@ -293,16 +285,13 @@ def get_historical_candles(instrument_key, symbol):
     except Exception as e:
         print(f"  ⚠️ Historical error: {e}")
     
-    # Step 3: COMBINE
     if historical_candles and today_candles:
         combined = historical_candles + today_candles
-        print(f"  ✅ COMBINED: {len(combined)} total 15min candles")
+        print(f"  ✅ COMBINED: {len(combined)} total candles")
         return combined
     elif today_candles:
-        print(f"  ⚠️ Only today: {len(today_candles)} candles")
         return today_candles
     elif historical_candles:
-        print(f"  ⚠️ Only history: {len(historical_candles)} candles")
         return historical_candles
     
     print(f"  ❌ {symbol}: No candle data")
@@ -311,30 +300,21 @@ def get_historical_candles(instrument_key, symbol):
 # ==================== CHART CREATION ====================
 
 def create_candlestick_chart(candles, symbol, spot_price):
-    """Create professional TradingView-style candlestick chart"""
+    """Create TradingView-style candlestick chart"""
     if not candles or len(candles) < 3:
         return None
     
-    dates = []
-    opens = []
-    highs = []
-    lows = []
-    closes = []
-    volumes = []
+    dates, opens, highs, lows, closes, volumes = [], [], [], [], [], []
     
     for candle in reversed(candles):
         try:
             timestamp = datetime.fromisoformat(candle[0].replace('Z', '+00:00'))
             timestamp = timestamp.astimezone(IST)
             
-            # Skip weekends
             if timestamp.weekday() >= 5:
                 continue
             
-            # Market hours only (9:15 AM - 3:30 PM)
-            hour = timestamp.hour
-            minute = timestamp.minute
-            
+            hour, minute = timestamp.hour, timestamp.minute
             if hour < 9 or (hour == 9 and minute < 15):
                 continue
             if hour > 15 or (hour == 15 and minute > 30):
@@ -361,38 +341,30 @@ def create_candlestick_chart(candles, symbol, spot_price):
     
     indices = range(len(dates))
     
-    # Draw candlesticks
+    # Candlesticks
     for i in indices:
         is_bullish = closes[i] >= opens[i]
         body_color = '#089981' if is_bullish else '#f23645'
-        wick_color = body_color
         
-        # Wick
         ax1.plot([i, i], [lows[i], highs[i]], 
-                color=wick_color, linewidth=1.0, alpha=1.0, 
+                color=body_color, linewidth=1.0, alpha=1.0, 
                 solid_capstyle='round', zorder=2)
         
-        # Body
         height = abs(closes[i] - opens[i])
         bottom = min(opens[i], closes[i])
         
         if height > 0.001:
             rect = Rectangle((i - 0.4, bottom), 0.8, height, 
-                           facecolor=body_color, 
-                           edgecolor=body_color, 
-                           alpha=1.0,
-                           linewidth=0,
-                           zorder=3)
+                           facecolor=body_color, edgecolor=body_color, 
+                           alpha=1.0, linewidth=0, zorder=3)
             ax1.add_patch(rect)
         else:
             ax1.plot([i - 0.4, i + 0.4], [opens[i], opens[i]], 
                     color=body_color, linewidth=1.5, solid_capstyle='butt', zorder=3)
     
-    # Current price line
     ax1.axhline(y=spot_price, color='#2962FF', linestyle='--', 
                linewidth=1.5, alpha=0.85, zorder=4)
     
-    # Price label on right
     ax1_right = ax1.twinx()
     ax1_right.set_ylim(ax1.get_ylim())
     ax1_right.set_yticks([spot_price])
@@ -403,7 +375,6 @@ def create_candlestick_chart(candles, symbol, spot_price):
     ax1.set_ylabel('Price (₹)', color='#787B86', fontsize=11, fontweight='500')
     ax1.tick_params(axis='y', colors='#787B86', labelsize=9.5)
     ax1.tick_params(axis='x', colors='#787B86', labelsize=9)
-    
     ax1.grid(True, alpha=0.12, color='#D1D4DC', linestyle='-', linewidth=0.5, zorder=1)
     ax1.set_axisbelow(True)
     
@@ -411,14 +382,8 @@ def create_candlestick_chart(candles, symbol, spot_price):
     ax1.set_title(title, color='#131722', fontsize=16, fontweight='600', 
                  pad=20, loc='left')
     
-    # Volume bars
-    colors_vol = []
-    for i in indices:
-        if closes[i] >= opens[i]:
-            colors_vol.append('#08998166')
-        else:
-            colors_vol.append('#f2364566')
-    
+    # Volume
+    colors_vol = ['#08998166' if closes[i] >= opens[i] else '#f2364566' for i in indices]
     ax2.bar(indices, volumes, color=colors_vol, width=0.8, 
            alpha=1.0, edgecolor='none', zorder=2)
     
@@ -428,7 +393,6 @@ def create_candlestick_chart(candles, symbol, spot_price):
     ax2.grid(True, alpha=0.12, color='#D1D4DC', linestyle='-', linewidth=0.5, zorder=1)
     ax2.set_axisbelow(True)
     
-    # X-axis labels
     step = max(1, len(dates) // 10)
     tick_positions = list(range(0, len(dates), step))
     tick_labels = [dates[i].strftime('%d %b\n%H:%M') for i in tick_positions]
@@ -462,34 +426,26 @@ def create_candlestick_chart(candles, symbol, spot_price):
 
 # ==================== MESSAGE FORMATTING ====================
 
-def format_option_chain_message(symbol, spot, expiry, strikes, show_all=False):
-    """Format option chain message with ALL strikes or ATM range"""
+def format_option_chain_message(symbol, spot, expiry, strikes):
+    """Format option chain message"""
     if not strikes:
         return None
     
-    # Find ATM strike
     atm_index = min(range(len(strikes)), 
                    key=lambda i: abs(strikes[i].get('strike_price', 0) - spot))
     
-    if show_all:
-        # Show ALL strikes
-        selected = strikes
-        header_note = f"(ALL {len(strikes)} STRIKES)"
-    else:
-        # Show ATM ±10 strikes (21 total)
-        start = max(0, atm_index - 10)
-        end = min(len(strikes), atm_index + 11)
-        
-        if end - start < 21:
-            if start == 0:
-                end = min(21, len(strikes))
-            else:
-                start = max(0, len(strikes) - 21)
-        
-        selected = strikes[start:end]
-        header_note = f"(ATM ±10 STRIKES)"
+    start = max(0, atm_index - 10)
+    end = min(len(strikes), atm_index + 11)
     
-    msg = f"📊 *{symbol} OPTION CHAIN* {header_note}\n\n"
+    if end - start < 21:
+        if start == 0:
+            end = min(21, len(strikes))
+        else:
+            start = max(0, len(strikes) - 21)
+    
+    selected = strikes[start:end]
+    
+    msg = f"📊 *{symbol} OPTION CHAIN*\n\n"
     msg += f"💰 Spot: ₹{spot:,.2f}\n"
     msg += f"📅 Expiry: {expiry}\n"
     msg += f"🎯 ATM: ₹{strikes[atm_index].get('strike_price', 0):,.2f}\n\n"
@@ -498,10 +454,7 @@ def format_option_chain_message(symbol, spot, expiry, strikes, show_all=False):
     msg += "Strike    CE-LTP  CE-Vol   CE-OI    PE-LTP  PE-Vol   PE-OI\n"
     msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     
-    total_ce_oi = 0
-    total_pe_oi = 0
-    total_ce_vol = 0
-    total_pe_vol = 0
+    total_ce_oi = total_pe_oi = total_ce_vol = total_pe_vol = 0
     
     for i, s in enumerate(selected):
         strike_price = s.get('strike_price', 0)
@@ -523,21 +476,10 @@ def format_option_chain_message(symbol, spot, expiry, strikes, show_all=False):
         total_ce_vol += ce_vol
         total_pe_vol += pe_vol
         
-        ce_vol_k = ce_vol / 1000 if ce_vol > 0 else 0
-        ce_oi_k = ce_oi / 1000 if ce_oi > 0 else 0
-        pe_vol_k = pe_vol / 1000 if pe_vol > 0 else 0
-        pe_oi_k = pe_oi / 1000 if pe_oi > 0 else 0
-        
-        msg += f"{mark}{strike_price:8.2f} {ce_ltp:7.2f} {ce_vol_k:7.1f}K {ce_oi_k:7.1f}K {pe_ltp:7.2f} {pe_vol_k:7.1f}K {pe_oi_k:7.1f}K\n"
+        msg += f"{mark}{strike_price:8.2f} {ce_ltp:7.2f} {ce_vol/1000:7.1f}K {ce_oi/1000:7.1f}K {pe_ltp:7.2f} {pe_vol/1000:7.1f}K {pe_oi/1000:7.1f}K\n"
     
     msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    
-    total_ce_vol_k = total_ce_vol / 1000
-    total_ce_oi_k = total_ce_oi / 1000
-    total_pe_vol_k = total_pe_vol / 1000
-    total_pe_oi_k = total_pe_oi / 1000
-    
-    msg += f"TOTAL          {total_ce_vol_k:7.1f}K {total_ce_oi_k:7.1f}K        {total_pe_vol_k:7.1f}K {total_pe_oi_k:7.1f}K\n"
+    msg += f"TOTAL          {total_ce_vol/1000:7.1f}K {total_ce_oi/1000:7.1f}K        {total_pe_vol/1000:7.1f}K {total_pe_oi/1000:7.1f}K\n"
     msg += "```\n\n"
     
     pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
@@ -562,7 +504,7 @@ async def send_telegram_text(msg):
         return False
 
 async def send_telegram_photo(photo_buf, caption):
-    """Send photo with caption"""
+    """Send photo"""
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
         await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_buf, 
@@ -574,13 +516,66 @@ async def send_telegram_photo(photo_buf, caption):
 
 # ==================== NIFTY INDEX PROCESSING ====================
 
+async def process_nifty_index():
+    """Process NIFTY 50 Index"""
+    print("\n" + "="*60)
+    print("📊 NIFTY 50 INDEX")
+    print("="*60)
+    
+    try:
+        expiry = get_next_expiry(NIFTY_INDEX_KEY, is_nifty_index=True)
+        spot = get_spot_price(NIFTY_INDEX_KEY)
+        
+        if spot == 0:
+            print("⚠️ Invalid NIFTY spot price")
+            return False
+        
+        print(f"✅ NIFTY Spot: ₹{spot:.2f}")
+        print(f"📅 Nearest Expiry (Tuesday): {expiry}")
+        
+        strikes = get_option_chain(NIFTY_INDEX_KEY, expiry)
+        
+        if not strikes:
+            print("⚠️ No option chain data")
+            return False
+        
+        print(f"✅ Total Strikes: {len(strikes)}")
+        
+        msg = format_option_chain_message("NIFTY 50 INDEX", spot, expiry, strikes)
+        
+        if msg:
+            await send_telegram_text(msg)
+            print("📤 Option chain sent")
+        
+        print("📊 Fetching NIFTY candles...")
+        candles = get_historical_candles(NIFTY_INDEX_KEY, "NIFTY 50")
+        
+        if candles and len(candles) >= 3:
+            print("📈 Creating NIFTY chart...")
+            chart_buf = create_candlestick_chart(candles, "NIFTY 50 INDEX", spot)
+            
+            if chart_buf:
+                caption = f"📈 *NIFTY 50 INDEX* - 15min Chart\n💰 Spot: ₹{spot:.2f}\n📅 Expiry: {expiry}"
+                await send_telegram_photo(chart_buf, caption)
+                print("📤 NIFTY chart sent!")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ NIFTY Index error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+# ==================== STOCK PROCESSING ====================
+
 async def process_stock(instrument_key, symbol, idx, total):
     """Process single stock"""
     print(f"\n[{idx}/{total}] {symbol}")
     print(f"  🔑 Key: {instrument_key}")
     
     try:
-        expiry = get_next_expiry(instrument_key)
+        expiry = get_next_expiry(instrument_key, is_nifty_index=False)
         spot = get_spot_price(instrument_key)
         
         if spot == 0:
@@ -590,19 +585,16 @@ async def process_stock(instrument_key, symbol, idx, total):
         strikes = get_option_chain(instrument_key, expiry)
         
         if not strikes or len(strikes) < 11:
-            print(f"  ⚠️ Insufficient strikes ({len(strikes) if strikes else 0})")
+            print(f"  ⚠️ Insufficient strikes")
             return False
         
         print(f"  ✅ Spot: ₹{spot:.2f} | Strikes: {len(strikes)}")
         
-        msg = format_option_chain_message(symbol, spot, expiry, strikes, show_all=False)
+        msg = format_option_chain_message(symbol, spot, expiry, strikes)
         
-        if not msg:
-            print(f"  ⚠️ Message format failed")
-            return False
-        
-        await send_telegram_text(msg)
-        print(f"  📤 Option chain sent")
+        if msg:
+            await send_telegram_text(msg)
+            print(f"  📤 Option chain sent")
         
         print(f"  📊 Fetching candles...")
         candles = get_historical_candles(instrument_key, symbol)
@@ -615,16 +607,11 @@ async def process_stock(instrument_key, symbol, idx, total):
                 caption = f"📈 *{symbol}* - 15min Chart\n💰 Spot: ₹{spot:.2f}\n📅 Expiry: {expiry}"
                 await send_telegram_photo(chart_buf, caption)
                 print(f"  📤 Chart sent!")
-                return True
-        else:
-            print(f"  ⚠️ No chart data")
         
         return True
         
     except Exception as e:
         print(f"  ❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
         return False
 
 # ==================== MAIN LOOP ====================
@@ -642,20 +629,17 @@ async def fetch_all():
     
     await send_telegram_text(header)
     
-    # PRIORITY #1: Process NIFTY 50 Index first
     print("\n🎯 Processing NIFTY 50 INDEX (Priority)...")
     nifty_success = await process_nifty_index()
     
     if nifty_success:
-        print("✅ NIFTY Index processed successfully")
-    else:
-        print("⚠️ NIFTY Index processing failed")
+        print("✅ NIFTY Index processed")
     
     await asyncio.sleep(2)
     
-    # Process all stocks
     print("\n📊 Processing NIFTY 50 Stocks...")
     success = 0
+    total = len(NIFTY50_
     total = len(NIFTY50_STOCKS)
     
     for idx, (key, symbol) in enumerate(NIFTY50_STOCKS.items(), 1):
@@ -707,66 +691,11 @@ async def main():
     print(f"📈 {len(NIFTY50_STOCKS)} Stocks Option Chain + Charts")
     print("🎨 Professional TradingView style charts")
     print("🔑 100% Upstox API v2")
-    print("⏰ Auto-select nearest expiry")
+    print("⏰ Auto-select nearest expiry (Tuesday for NIFTY)")
     print("📱 Telegram notifications every 5 minutes")
     print("="*70 + "\n")
     
     await monitoring_loop()
 
 if __name__ == "__main__":
-    asyncio.run(main())nifty_index():
-    """Process NIFTY 50 Index - PRIORITY #1"""
-    print("\n" + "="*60)
-    print("📊 NIFTY 50 INDEX")
-    print("="*60)
-    
-    try:
-        expiry = get_next_expiry(NIFTY_INDEX_KEY)
-        spot = get_spot_price(NIFTY_INDEX_KEY)
-        
-        if spot == 0:
-            print("⚠️ Invalid NIFTY spot price")
-            return False
-        
-        print(f"✅ NIFTY Spot: ₹{spot:.2f}")
-        print(f"📅 Nearest Expiry: {expiry}")
-        
-        strikes = get_option_chain(NIFTY_INDEX_KEY, expiry)
-        
-        if not strikes:
-            print("⚠️ No option chain data")
-            return False
-        
-        print(f"✅ Total Strikes: {len(strikes)}")
-        
-        # Send option chain (ATM ±10 strikes)
-        msg = format_option_chain_message("NIFTY 50 INDEX", spot, expiry, strikes, show_all=False)
-        
-        if msg:
-            await send_telegram_text(msg)
-            print("📤 Option chain sent")
-        
-        # Get and send chart
-        print("📊 Fetching NIFTY candles...")
-        candles = get_historical_candles(NIFTY_INDEX_KEY, "NIFTY 50")
-        
-        if candles and len(candles) >= 3:
-            print("📈 Creating NIFTY chart...")
-            chart_buf = create_candlestick_chart(candles, "NIFTY 50 INDEX", spot)
-            
-            if chart_buf:
-                caption = f"📈 *NIFTY 50 INDEX* - 15min Chart\n💰 Spot: ₹{spot:.2f}\n📅 Expiry: {expiry}"
-                await send_telegram_photo(chart_buf, caption)
-                print("📤 NIFTY chart sent!")
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ NIFTY Index error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-# ==================== STOCK PROCESSING ====================
-
-async def process_
+    asyncio.run(main())
