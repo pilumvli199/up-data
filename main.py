@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-COMPLETE MARKET MONITOR - v4 (Robust Historical Charts)
+COMPLETE MARKET MONITOR - v5 (Clearer Candlesticks)
 - ALL NIFTY 50 Stocks + POONAWALLA
 - NIFTY 50, BANK NIFTY, FIN NIFTY, MIDCAP NIFTY
-- FIX: Fetches 30-min historical data and splits it into 5-min candles for reliability.
+- FIX: Improved candlestick rendering for better clarity, especially with more historical data.
 - Enhanced option chain with OI, Volume, and GREEKS.
 """
 
@@ -61,10 +61,9 @@ NIFTY50_STOCKS = {
 # Global tracking
 DAILY_STATS = {"total_alerts": 0, "indices_count": 0, "stocks_count": 0, "start_time": None}
 
-print("="*70); print("🚀 COMPLETE MARKET MONITOR - v4 (Robust Historical Charts)"); print("="*70)
+print("="*70); print("🚀 COMPLETE MARKET MONITOR - v5 (Clearer Candlesticks)"); print("="*70)
 
 def get_expiries(instrument_key):
-    # This function remains the same
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     url = f"{BASE_URL}/v2/option/contract?instrument_key={encoded_key}"
@@ -78,7 +77,6 @@ def get_expiries(instrument_key):
     return []
 
 def get_next_expiry(instrument_key, expiry_day=1):
-    # This function remains the same
     expiries = get_expiries(instrument_key)
     if not expiries:
         today = datetime.now(IST)
@@ -90,7 +88,6 @@ def get_next_expiry(instrument_key, expiry_day=1):
     return min(future) if future else expiries[0]
 
 def get_option_chain(instrument_key, expiry):
-    # This function remains the same
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     url = f"{BASE_URL}/v2/option/chain?instrument_key={encoded_key}&expiry_date={expiry}"
@@ -104,7 +101,6 @@ def get_option_chain(instrument_key, expiry):
     return []
 
 def get_spot_price(instrument_key):
-    # This function remains the same
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
     encoded_key = urllib.parse.quote(instrument_key, safe='')
     url = f"{BASE_URL}/v2/market-quote/quotes?instrument_key={encoded_key}"
@@ -131,22 +127,23 @@ def split_30min_to_5min(candle_30min):
         dt_start = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).astimezone(IST)
         
         # Approximate price and volume distribution
-        price_diff = (close_price - open_price) / 6
-        vol_per_candle = volume / 6
+        price_range = high_price - low_price
         
         candles_5min = []
         for i in range(6):
             c_time = dt_start + timedelta(minutes=i * 5)
-            c_open = open_price + (price_diff * i)
-            c_close = open_price + (price_diff * (i + 1))
+            # For simplicity, distribute the 30min candle's range across 5min candles
+            # More sophisticated methods exist but this gives a visual representation
+            c_open = open_price + (close_price - open_price) * (i / 6)
+            c_close = open_price + (close_price - open_price) * ((i + 1) / 6)
             
-            # Simulate high/low
-            c_high = max(c_open, c_close) + abs(price_diff)
-            c_low = min(c_open, c_close) - abs(price_diff)
+            # Ensure high is never below close/open and low is never above
+            c_high = max(c_open, c_close, open_price, close_price) # Simplified
+            c_low = min(c_open, c_close, open_price, close_price)  # Simplified
 
             candles_5min.append([
-                c_time.isoformat(), c_open, max(high_price, c_high), min(low_price, c_low), c_close,
-                vol_per_candle, oi
+                c_time.isoformat(), c_open, c_high, c_low, c_close,
+                volume / 6, oi # Distribute volume, keep OI same for simplicity
             ])
         return candles_5min
     except Exception:
@@ -155,7 +152,7 @@ def split_30min_to_5min(candle_30min):
 
 def get_live_candles(instrument_key, symbol):
     """
-    FIXED: Fetches 30-min historical data, splits it into 5-min candles,
+    Fetches 30-min historical data, splits it into 5-min candles,
     and then combines with today's live data for a robust chart.
     """
     headers = {"Accept": "application/json", "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"}
@@ -164,6 +161,7 @@ def get_live_candles(instrument_key, symbol):
     # 1. Fetch Historical Data (Last 15 days, 30-minute interval)
     historical_5min_candles = []
     try:
+        # Fetch up to yesterday
         to_date = (datetime.now(IST) - timedelta(days=1)).strftime('%Y-%m-%d')
         from_date = (datetime.now(IST) - timedelta(days=15)).strftime('%Y-%m-%d')
         url = f"{BASE_URL}/v2/historical-candle/{encoded_key}/30minute/{to_date}/{from_date}"
@@ -200,17 +198,32 @@ def get_live_candles(instrument_key, symbol):
         
     all_candles = sorted(historical_5min_candles + intraday_5min_candles, key=lambda x: x[0])
     
-    return all_candles, len(historical_5min_candles)
+    # Filter to last 5 market days of data (approx)
+    today = datetime.now(IST).date()
+    # Find the starting point for approx 5 market days
+    five_days_ago = today
+    day_count = 0
+    while day_count < 5:
+        five_days_ago -= timedelta(days=1)
+        # Check if it's a weekday and not a holiday (approximation)
+        if five_days_ago.weekday() < 5: # Monday=0, Sunday=6
+            day_count += 1
+            
+    filtered_candles = [c for c in all_candles if datetime.fromisoformat(c[0].replace("Z", "+00:00")).astimezone(IST).date() >= five_days_ago]
+    
+    # Recalculate hist_count based on filtered_candles
+    hist_count = len([c for c in filtered_candles if datetime.fromisoformat(c[0].replace("Z", "+00:00")).astimezone(IST).date() < today])
+
+    return filtered_candles, hist_count
 
 
 def create_premium_chart(candles, symbol, spot_price, hist_count):
-    # This function is now more robust with the corrected `hist_count`
     if not candles or len(candles) < 2: return None
     
     data = []
     for c in candles:
         try:
-            ts = datetime.fromisoformat(c[0]).astimezone(IST)
+            ts = datetime.fromisoformat(c[0].replace("Z", "+00:00")).astimezone(IST)
             if time(9, 15) <= ts.time() <= time(15, 30):
                 data.append({'timestamp': ts, 'open': float(c[1]), 'high': float(c[2]), 'low': float(c[3]), 'close': float(c[4]), 'volume': int(c[5])})
         except (ValueError, TypeError):
@@ -221,13 +234,18 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(28, 13), gridspec_kw={'height_ratios': [4, 1]}, facecolor='#0e1217')
     for ax in [ax1, ax2]: ax.set_facecolor('#0e1217')
     
+    # Dynamic width for candlesticks
+    candle_width = min(0.7, 10 / len(data)) # Adjust width based on number of candles
+    line_width = max(0.8, 1.5 - (len(data) / 100)) # Adjust line width
+    
     for i, row in enumerate(data):
         is_today = i >= hist_count
-        alpha = 1.0 if is_today else 0.65
+        alpha = 1.0 if is_today else 0.8 # Slightly more opaque for historical data
         color = '#26a69a' if row['close'] >= row['open'] else '#ef5350'
-        ax1.plot([i, i], [row['low'], row['high']], color=color, linewidth=1.3, alpha=alpha)
-        ax1.add_patch(Rectangle((i - 0.35, min(row['open'], row['close'])), 0.7, abs(row['close'] - row['open']), facecolor=color, alpha=alpha))
-        ax2.bar(i, row['volume'], width=0.7, color=color, alpha=alpha)
+        ax1.plot([i, i], [row['low'], row['high']], color=color, linewidth=line_width, alpha=alpha) # Increased linewidth
+        ax1.add_patch(Rectangle((i - candle_width/2, min(row['open'], row['close'])), candle_width, abs(row['close'] - row['open']), facecolor=color, alpha=alpha))
+
+        ax2.bar(i, row['volume'], width=candle_width, color=color, alpha=alpha) # Use dynamic width for volume bars
 
     if hist_count > 0 and hist_count < len(data):
         ax1.axvline(x=hist_count - 0.5, color='#ffa726', linestyle='--', linewidth=1.5, alpha=0.7)
@@ -240,35 +258,46 @@ def create_premium_chart(candles, symbol, spot_price, hist_count):
     ax1.set_title(f'{symbol} • 5 Min Chart (LIVE) • {datetime.now(IST).strftime("%d %b %Y • %I:%M:%S %p IST")}', color='#d1d4dc', fontsize=17, fontweight='700', loc='left')
     ax1.set_ylabel('Price (₹)', color='#b2b5be'); ax2.set_ylabel('Volume', color='#b2b5be')
     
-    tick_positions = list(range(0, len(data), max(1, len(data) // 10)))
+    tick_positions = []
     tick_labels = []
     last_date_label = None
-    for i in tick_positions:
+    
+    # Logic to put date label only once per day
+    for i in range(len(data)):
         current_date = data[i]['timestamp'].date()
         if current_date != last_date_label:
+            tick_positions.append(i)
             tick_labels.append(data[i]['timestamp'].strftime('%d %b'))
             last_date_label = current_date
-        else:
-            tick_labels.append(data[i]['timestamp'].strftime('%H:%M'))
+        elif i % (60 / 5 * 2) == 0: # Every 2 hours (approx 24 candles) for time, if not a new day
+             if len(data) > 100: # Only add time labels if many candles
+                tick_positions.append(i)
+                tick_labels.append(data[i]['timestamp'].strftime('%H:%M'))
+    
+    # Ensure there are enough labels, or simplify if too many
+    if len(tick_positions) > 15: # Arbitrary threshold for too many labels
+        # Resample labels to get fewer, more spread out ones
+        step = max(1, len(tick_positions) // 10) # Aim for ~10 labels
+        tick_positions = tick_positions[::step]
+        tick_labels = tick_labels[::step]
 
     for ax in [ax1, ax2]:
         ax.grid(True, alpha=0.12, color='#363a45'); ax.tick_params(axis='y', colors='#787b86', labelsize=11)
         ax.set_xticks(tick_positions); ax.set_xticklabels(tick_labels, color='#787b86', fontsize=10)
         ax.set_xlim(-1, len(data)); [spine.set_color('#1e222d') for spine in ax.spines.values()]
+    ax2.set_xlabel('Date & Time (IST)', color='#b2b5be')
 
     plt.tight_layout(pad=2); plt.subplots_adjust(hspace=0.08)
     buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=160, facecolor='#0e1217'); buf.seek(0); plt.close(fig)
     return buf
 
 def format_value(num):
-    # This function remains the same
     if num >= 10000000: return f"{num/10000000:.1f}Cr"
     if num >= 100000: return f"{num/100000:.1f}L"
     if num >= 1000: return f"{num/1000:.1f}K"
     return str(int(num))
 
 def format_option_chain_message(symbol, spot, expiry, strikes):
-    # This function remains the same
     if not strikes: return None
     atm_strike = min(strikes, key=lambda x: abs(x.get('strike_price', 0) - spot))
     atm_index = strikes.index(atm_strike)
@@ -311,7 +340,6 @@ def format_option_chain_message(symbol, spot, expiry, strikes):
     return msg
 
 async def send_telegram_message(bot, text=None, photo=None, caption=None):
-    # This function remains the same
     try:
         if photo:
             await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo, caption=caption, parse_mode='Markdown')
@@ -324,7 +352,6 @@ async def send_telegram_message(bot, text=None, photo=None, caption=None):
         return False
 
 async def process_instrument(bot, key, name, expiry_day, is_stock=False, idx=0, total=0):
-    # This function remains the same
     prefix = f"[{idx}/{total}] STOCK:" if is_stock else "INDEX:"
     print(f"\n{prefix} {name}")
     try:
@@ -362,7 +389,6 @@ async def process_instrument(bot, key, name, expiry_day, is_stock=False, idx=0, 
         return False
 
 async def fetch_all(bot):
-    # This function remains the same
     now = datetime.now(IST)
     print(f"\n{'='*60}\n🚀 RUN: {now.strftime('%I:%M:%S %p IST')}\n{'='*60}")
     
@@ -388,7 +414,6 @@ async def fetch_all(bot):
     print(f"\n✅ CYCLE DONE: Indices={DAILY_STATS['indices_count']}/4 | Stocks={DAILY_STATS['stocks_count']}/{len(NIFTY50_STOCKS)}")
 
 async def main():
-    # This function remains the same
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     while True:
         now = datetime.now(IST)
