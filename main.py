@@ -842,7 +842,7 @@ Bot is running and waiting for market hours...
 
     async def send_alert(self, symbol: str, analysis: DeepAnalysis, chart: Optional[io.BytesIO]):
         # ✅ CORRECTED EMOJI
-        emoji = "🟢" if analysis.opportunity == "CE_BUY" else "🔴" if analysis.opportunity == "PE_BUY"
+        emoji = "🟢" if analysis.opportunity == "CE_BUY" else "🔴" if analysis.opportunity == "PE_BUY" else "⚪"
         
         news_str = f"📰 **News:** {analysis.news_sentiment} (Impact: {analysis.news_impact})" if analysis.news_impact > 60 else ""
         
@@ -1014,3 +1014,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
