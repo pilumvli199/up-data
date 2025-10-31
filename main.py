@@ -103,6 +103,15 @@ class AggregateOIAnalysis:
     pcr: float
     overall_sentiment: str
     max_pain: float = 0.0
+    timeframe: str = "30min"  # NEW: 30min or 2hr
+    
+@dataclass
+class MultiOIAnalysis:
+    """Multi-timeframe OI analysis"""
+    oi_30min: AggregateOIAnalysis  # PRIMARY
+    oi_2hr: AggregateOIAnalysis    # SECONDARY
+    combined_sentiment: str        # Final combined sentiment
+    alignment_strength: int        # 0-100
 
 @dataclass
 class MultiTimeframeData:
@@ -207,7 +216,7 @@ class FinnhubNewsAPI:
             return []
 
 class RedisCache:
-    """Redis cache for OI data with 24-hour expiry"""
+    """Redis cache for OI data with dual timeframe tracking"""
     
     def __init__(self):
         self.redis_client = None
@@ -233,13 +242,12 @@ class RedisCache:
             self.connected = False
     
     def store_option_chain(self, symbol: str, oi_data: List[OIData], spot_price: float) -> bool:
-        """Store option chain data in Redis with 24h expiry"""
+        """Store option chain in BOTH 30min and 2hr keys"""
         try:
             if not self.redis_client or not self.connected:
                 return False
             
-            key = f"oi_data:{symbol}"
-            value = json.dumps({
+            data_json = json.dumps({
                 'spot_price': spot_price,
                 'strikes': [
                     {
@@ -256,25 +264,73 @@ class RedisCache:
                 'timestamp': datetime.now(IST).isoformat()
             })
             
-            self.redis_client.setex(key, REDIS_EXPIRY, value)
+            # Store in 30min key (PRIMARY)
+            key_30min = f"oi_30min:{symbol}"
+            self.redis_client.setex(key_30min, 1800, data_json)  # 30 minutes
+            
+            # Store in 2hr key (SECONDARY)
+            key_2hr = f"oi_2hr:{symbol}"
+            self.redis_client.setex(key_2hr, 7200, data_json)  # 2 hours
+            
+            logger.info(f"  💾 Redis: Stored {symbol} (30min + 2hr)")
             return True
         except Exception as e:
             logger.error(f"Redis store error: {e}")
             return False
     
-    def get_oi_comparison(self, symbol: str, current_oi: List[OIData], 
-                         current_price: float) -> Optional[AggregateOIAnalysis]:
-        """Compare current OI with cached data"""
+    def get_multi_oi_comparison(self, symbol: str, current_oi: List[OIData], 
+                                current_price: float) -> Optional[MultiOIAnalysis]:
+        """Compare current OI with BOTH 30min and 2hr cached data"""
         try:
             if not self.redis_client or not self.connected:
-                return self._calculate_aggregate_without_cache(current_oi)
+                base_agg = self._calculate_aggregate_without_cache(current_oi, "30min")
+                return MultiOIAnalysis(
+                    oi_30min=base_agg,
+                    oi_2hr=base_agg,
+                    combined_sentiment=base_agg.overall_sentiment,
+                    alignment_strength=50
+                )
             
-            key = f"oi_data:{symbol}"
+            # Get 30min comparison (PRIMARY)
+            oi_30min = self._get_comparison(symbol, current_oi, "30min")
+            
+            # Get 2hr comparison (SECONDARY)
+            oi_2hr = self._get_comparison(symbol, current_oi, "2hr")
+            
+            # Calculate combined sentiment and alignment
+            combined_sentiment, alignment = self._calculate_combined_sentiment(oi_30min, oi_2hr)
+            
+            logger.info(f"  📊 {symbol} OI Analysis:")
+            logger.info(f"     30min: {oi_30min.overall_sentiment} (CE:{oi_30min.ce_oi_change_pct:+.1f}% PE:{oi_30min.pe_oi_change_pct:+.1f}%)")
+            logger.info(f"     2hr: {oi_2hr.overall_sentiment} (CE:{oi_2hr.ce_oi_change_pct:+.1f}% PE:{oi_2hr.pe_oi_change_pct:+.1f}%)")
+            logger.info(f"     Combined: {combined_sentiment} | Alignment: {alignment}%")
+            
+            return MultiOIAnalysis(
+                oi_30min=oi_30min,
+                oi_2hr=oi_2hr,
+                combined_sentiment=combined_sentiment,
+                alignment_strength=alignment
+            )
+            
+        except Exception as e:
+            logger.error(f"Multi OI comparison error: {e}")
+            base_agg = self._calculate_aggregate_without_cache(current_oi, "30min")
+            return MultiOIAnalysis(
+                oi_30min=base_agg,
+                oi_2hr=base_agg,
+                combined_sentiment=base_agg.overall_sentiment,
+                alignment_strength=50
+            )
+    
+    def _get_comparison(self, symbol: str, current_oi: List[OIData], 
+                       timeframe: str) -> AggregateOIAnalysis:
+        """Get comparison for specific timeframe"""
+        try:
+            key = f"oi_{timeframe}:{symbol}"
             cached = self.redis_client.get(key)
             
             if not cached:
-                logger.info(f"{symbol}: First scan (no cache)")
-                return self._calculate_aggregate_without_cache(current_oi)
+                return self._calculate_aggregate_without_cache(current_oi, timeframe)
             
             old_data = json.loads(cached)
             
@@ -305,8 +361,6 @@ class RedisCache:
             elif pcr < 0.7:
                 sentiment = "BEARISH"
             
-            logger.info(f"{symbol}: OI Change - CE:{ce_oi_change_pct:+.1f}% PE:{pe_oi_change_pct:+.1f}% | Sentiment:{sentiment}")
-            
             return AggregateOIAnalysis(
                 total_ce_oi=total_ce_oi_new,
                 total_pe_oi=total_pe_oi_new,
@@ -317,14 +371,15 @@ class RedisCache:
                 ce_volume_change_pct=ce_volume_change_pct,
                 pe_volume_change_pct=pe_volume_change_pct,
                 pcr=pcr,
-                overall_sentiment=sentiment
+                overall_sentiment=sentiment,
+                timeframe=timeframe
             )
             
         except Exception as e:
-            logger.error(f"Redis comparison error: {e}")
-            return self._calculate_aggregate_without_cache(current_oi)
+            logger.error(f"Comparison error ({timeframe}): {e}")
+            return self._calculate_aggregate_without_cache(current_oi, timeframe)
     
-    def _calculate_aggregate_without_cache(self, oi_data: List[OIData]) -> AggregateOIAnalysis:
+    def _calculate_aggregate_without_cache(self, oi_data: List[OIData], timeframe: str) -> AggregateOIAnalysis:
         """Calculate aggregate without comparison"""
         total_ce_oi = sum(oi.ce_oi for oi in oi_data)
         total_pe_oi = sum(oi.pe_oi for oi in oi_data)
@@ -349,8 +404,41 @@ class RedisCache:
             ce_volume_change_pct=0,
             pe_volume_change_pct=0,
             pcr=pcr,
-            overall_sentiment=sentiment
+            overall_sentiment=sentiment,
+            timeframe=timeframe
         )
+    
+    def _calculate_combined_sentiment(self, oi_30min: AggregateOIAnalysis, 
+                                     oi_2hr: AggregateOIAnalysis) -> Tuple[str, int]:
+        """Calculate combined sentiment and alignment strength"""
+        # Sentiment mapping
+        sentiment_map = {"BULLISH": 1, "NEUTRAL": 0, "BEARISH": -1}
+        
+        s_30min = sentiment_map.get(oi_30min.overall_sentiment, 0)
+        s_2hr = sentiment_map.get(oi_2hr.overall_sentiment, 0)
+        
+        # Weighted average (30min = 60%, 2hr = 40%)
+        weighted_score = (s_30min * 0.6) + (s_2hr * 0.4)
+        
+        # Combined sentiment
+        if weighted_score > 0.3:
+            combined = "BULLISH"
+        elif weighted_score < -0.3:
+            combined = "BEARISH"
+        else:
+            combined = "NEUTRAL"
+        
+        # Alignment strength
+        if s_30min == s_2hr and s_30min != 0:
+            alignment = 100  # Perfect alignment
+        elif s_30min == s_2hr == 0:
+            alignment = 50   # Both neutral
+        elif abs(s_30min - s_2hr) == 1:
+            alignment = 70   # One neutral, one directional
+        else:
+            alignment = 30   # Opposing signals
+        
+        return combined, alignment
 
 class UpstoxDataFetcher:
     """Upstox API - Enhanced for 400+ candles"""
@@ -641,7 +729,7 @@ class ChartGenerator:
     
     @staticmethod
     def create_chart(mtf_data: MultiTimeframeData, symbol: str, spot_price: float,
-                    analysis: DeepAnalysis, aggregate: AggregateOIAnalysis) -> io.BytesIO:
+                    analysis: DeepAnalysis, multi_oi: MultiOIAnalysis) -> io.BytesIO:
         """Create professional chart"""
         try:
             df_plot = mtf_data.df_15m.tail(100).copy().reset_index(drop=True)
@@ -727,7 +815,12 @@ TF: {analysis.tf_alignment}
 5M: ₹{analysis.tf_5m_entry:.1f}
 
 ─────────────────────
-PCR: {aggregate.pcr:.2f} | {aggregate.overall_sentiment}
+OI-30min: {multi_oi.oi_30min.overall_sentiment}
+OI-2hr: {multi_oi.oi_2hr.overall_sentiment}
+Combined: {multi_oi.combined_sentiment} ({multi_oi.alignment_strength}%)
+
+─────────────────────
+PCR: {multi_oi.oi_30min.pcr:.2f}
 Entry: ₹{analysis.entry_price:.1f}
 SL: ₹{analysis.stop_loss:.1f}
 T1: ₹{analysis.target_1:.1f}
@@ -898,7 +991,7 @@ class AIAnalyzer:
     
     @staticmethod
     def deep_analysis(symbol: str, spot_price: float, mtf_data: MultiTimeframeData,
-                     aggregate: AggregateOIAnalysis, trend_1h: Dict, pattern_15m: Dict,
+                     multi_oi: MultiOIAnalysis, trend_1h: Dict, pattern_15m: Dict,
                      entry_5m: Dict, sr_levels: Dict, news_data: Optional[NewsData]) -> Optional[DeepAnalysis]:
         try:
             url = "https://api.deepseek.com/v1/chat/completions"
@@ -908,19 +1001,38 @@ class AIAnalyzer:
             if news_data:
                 news_section = f"\n📰 NEWS: {news_data.sentiment} | Impact: {news_data.impact_score}/100\n"
             
-            prompt = f"""Analyze {symbol} for F&O trading.
+            prompt = f"""Analyze {symbol} for F&O trading with MULTI-TIMEFRAME OI.
 
 SPOT: ₹{spot_price:.2f}
 1H: {trend_1h['trend']} ({trend_1h['strength']}%)
 15M: {pattern_15m['pattern']} | {pattern_15m['signal']}
 5M: Entry ₹{entry_5m['entry']:.2f}
 
-OPTIONS:
-PCR: {aggregate.pcr:.2f}
-CE OI: {aggregate.ce_oi_change_pct:+.1f}%
-PE OI: {aggregate.pe_oi_change_pct:+.1f}%
-Sentiment: {aggregate.overall_sentiment}
+MULTI-TIMEFRAME OI ANALYSIS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+30min OI (PRIMARY):
+  Sentiment: {multi_oi.oi_30min.overall_sentiment}
+  CE OI Change: {multi_oi.oi_30min.ce_oi_change_pct:+.1f}%
+  PE OI Change: {multi_oi.oi_30min.pe_oi_change_pct:+.1f}%
+  PCR: {multi_oi.oi_30min.pcr:.2f}
+
+2hr OI (SECONDARY):
+  Sentiment: {multi_oi.oi_2hr.overall_sentiment}
+  CE OI Change: {multi_oi.oi_2hr.ce_oi_change_pct:+.1f}%
+  PE OI Change: {multi_oi.oi_2hr.pe_oi_change_pct:+.1f}%
+  PCR: {multi_oi.oi_2hr.pcr:.2f}
+
+COMBINED OI:
+  Sentiment: {multi_oi.combined_sentiment}
+  Alignment: {multi_oi.alignment_strength}%
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 {news_section}
+INSTRUCTIONS:
+- 30min OI = Primary signal (60% weight)
+- 2hr OI = Trend confirmation (40% weight)
+- If alignment >80% = Strong signal
+- If alignment <50% = Weak/conflicting
+
 Reply JSON only:
 {{
   "opportunity": "PE_BUY" or "CE_BUY" or "WAIT",
@@ -935,8 +1047,8 @@ Reply JSON only:
   "target_2": {entry_5m['entry'] * 1.025:.2f},
   "risk_reward": "1:2.5",
   "recommended_strike": {int(spot_price)},
-  "pattern_signal": "Brief pattern analysis",
-  "oi_flow_signal": "Brief OI analysis",
+  "pattern_signal": "30min OI shows X, 2hr confirms Y",
+  "oi_flow_signal": "Multi-TF OI analysis",
   "market_structure": "Multi-TF structure",
   "support_levels": {sr_levels['supports'][:2]},
   "resistance_levels": {sr_levels['resistances'][:2]},
@@ -1040,6 +1152,9 @@ BOT INFO:
 
 ✅ Multi-Timeframe (1H→15M→5M)
 ✅ 400+ Candlesticks
+✅ Multi-TF OI Analysis:
+   • 30min OI (PRIMARY - 60%)
+   • 2hr OI (SECONDARY - 40%)
 ✅ News Intelligence
 ✅ Redis OI Tracking
 ✅ AI Analysis
@@ -1055,7 +1170,7 @@ Waiting for market hours...
             logger.error(f"Startup error: {e}")
     
     async def send_alert(self, symbol: str, spot: float, analysis: DeepAnalysis,
-                        agg: AggregateOIAnalysis, expiry: str, mtf: MultiTimeframeData,
+                        multi_oi: MultiOIAnalysis, expiry: str, mtf: MultiTimeframeData,
                         news: Optional[NewsData]):
         try:
             sig_map = {"PE_BUY": ("🟢", "PE BUY"), "CE_BUY": ("🔴", "CE BUY")}
@@ -1080,6 +1195,23 @@ TF ALIGNMENT: {analysis.tf_alignment}
 5M: ₹{analysis.tf_5m_entry:.1f}
 
 ════════════════════════
+MULTI-TIMEFRAME OI:
+════════════════════════
+30min (PRIMARY):
+  Sentiment: {multi_oi.oi_30min.overall_sentiment}
+  CE OI: {multi_oi.oi_30min.ce_oi_change_pct:+.1f}%
+  PE OI: {multi_oi.oi_30min.pe_oi_change_pct:+.1f}%
+
+2hr (SECONDARY):
+  Sentiment: {multi_oi.oi_2hr.overall_sentiment}
+  CE OI: {multi_oi.oi_2hr.ce_oi_change_pct:+.1f}%
+  PE OI: {multi_oi.oi_2hr.pe_oi_change_pct:+.1f}%
+
+COMBINED: {multi_oi.combined_sentiment}
+ALIGNMENT: {multi_oi.alignment_strength}%
+PCR: {multi_oi.oi_30min.pcr:.2f}
+
+════════════════════════
 TRADE SETUP:
 ════════════════════════
 Spot: ₹{spot:.2f}
@@ -1091,14 +1223,6 @@ RR: {analysis.risk_reward}
 Strike: {analysis.recommended_strike}
 
 ════════════════════════
-OPTIONS:
-════════════════════════
-PCR: {agg.pcr:.2f}
-CE OI: {agg.ce_oi_change_pct:+.1f}%
-PE OI: {agg.pe_oi_change_pct:+.1f}%
-Sentiment: {agg.overall_sentiment}
-
-════════════════════════
 Expiry: {expiry}
 Time: {datetime.now(IST).strftime('%H:%M:%S')} IST
 ════════════════════════"""
@@ -1106,10 +1230,10 @@ Time: {datetime.now(IST).strftime('%H:%M:%S')} IST
             await self.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=alert)
             
             # Chart
-            chart = ChartGenerator.create_chart(mtf, symbol, spot, analysis, agg)
+            chart = ChartGenerator.create_chart(mtf, symbol, spot, analysis, multi_oi)
             if chart:
                 await self.bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=chart,
-                                         caption=f"📈 {symbol} | {emoji} {sig}")
+                                         caption=f"📈 {symbol} | {emoji} {sig} | OI Align: {multi_oi.alignment_strength}%")
             
             logger.info(f"✅ Alert sent: {symbol}")
         except Exception as e:
@@ -1193,7 +1317,8 @@ class HybridBot:
                 if not oi_data:
                     continue
                 
-                agg = self.redis.get_oi_comparison(symbol, oi_data, spot)
+                # Multi-timeframe OI comparison (30min PRIMARY + 2hr SECONDARY)
+                multi_oi = self.redis.get_multi_oi_comparison(symbol, oi_data, spot)
                 self.redis.store_option_chain(symbol, oi_data, spot)
                 
                 mtf = self.fetcher.get_multi_timeframe_data(key, symbol)
@@ -1224,8 +1349,8 @@ class HybridBot:
                     logger.info(f"  ❌ Not aligned")
                     continue
                 
-                # AI analysis
-                deep = self.ai_analyzer.deep_analysis(symbol, spot, mtf, agg, trend_1h, 
+                # AI analysis with multi-timeframe OI
+                deep = self.ai_analyzer.deep_analysis(symbol, spot, mtf, multi_oi, trend_1h, 
                                                       pattern_15m, entry_5m, sr, news_data)
                 if not deep:
                     continue
@@ -1238,8 +1363,8 @@ class HybridBot:
                 if deep.total_score < SCORE_MIN:
                     continue
                 
-                # Send alert
-                await self.notifier.send_alert(symbol, spot, deep, agg, expiry, mtf, news_data)
+                # Send alert with multi-timeframe OI
+                await self.notifier.send_alert(symbol, spot, deep, multi_oi, expiry, mtf, news_data)
                 self.alerts_sent += 1
                 alerts += 1
                 
