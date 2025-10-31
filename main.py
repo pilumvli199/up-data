@@ -355,7 +355,7 @@ class UpstoxDataFetcher:
             return None
 
     def get_multi_timeframe_data(self, instrument_key: str) -> Optional[MultiTimeframeData]:
-        """Fetches continuous 15-min data and resamples it."""
+        """Fetches continuous 1-min data and resamples it."""
         if not self.connected:
             return None
         try:
@@ -363,29 +363,38 @@ class UpstoxDataFetcher:
             to_date = datetime.now(IST).strftime('%Y-%m-%d')
             from_date = (datetime.now(IST) - timedelta(days=60)).strftime('%Y-%m-%d')
             
-            url = f"{BASE_URL}/v2/historical-candle/{encoded}/15minute/{to_date}/{from_date}"
-            r = requests.get(url, headers=self.headers, timeout=20)
+            # ✅ FIX: Changed interval from "15minute" to "1minute" as per API spec
+            url = f"{BASE_URL}/v2/historical-candle/{encoded}/1minute/{to_date}/{from_date}"
+            # Increased timeout for potentially larger 1-min data request
+            r = requests.get(url, headers=self.headers, timeout=45)
             
             if r.status_code != 200 or r.json().get('status') != 'success':
-                logger.warning(f"Failed to fetch 15min data for {instrument_key}: {r.text}")
+                logger.warning(f"Failed to fetch 1min data for {instrument_key}: {r.text}")
                 return None
 
             candles = r.json().get('data', {}).get('candles', [])
             if not candles:
-                logger.warning(f"No 15min candle data returned for {instrument_key}")
+                logger.warning(f"No 1min candle data returned for {instrument_key}")
                 return None
 
             df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             df = df.set_index('timestamp').astype(float).sort_index()
             
-            # Resample to 3 timeframes
+            # Resample to 3 timeframes from 1-minute base data
             ohlc_dict = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
             df_5m = df.resample('5min').apply(ohlc_dict).dropna()
+            # ✅ FIX: Correctly resample 15m from 1m data
+            df_15m = df.resample('15min').apply(ohlc_dict).dropna()
             df_1h = df.resample('1H').apply(ohlc_dict).dropna()
             
-            logger.info(f"  📊 Continuous data: 5m={len(df_5m)}, 15m={len(df)}, 1h={len(df_1h)}")
-            return MultiTimeframeData(df_5m=df_5m, df_15m=df, df_1h=df_1h)
+            if df_5m.empty or df_15m.empty or df_1h.empty:
+                logger.warning(f"Resampling failed for {instrument_key}, not enough base data.")
+                return None
+            
+            logger.info(f"  📊 Continuous data: 5m={len(df_5m)}, 15m={len(df_15m)}, 1h={len(df_1h)}")
+            # ✅ FIX: Pass the correct resampled 15m dataframe
+            return MultiTimeframeData(df_5m=df_5m, df_15m=df_15m, df_1h=df_1h)
             
         except Exception as e:
             logger.error(f"MTF data processing error: {e}")
@@ -975,7 +984,7 @@ class HybridBot:
                     
                     results = await asyncio.gather(*scan_tasks)
 
-                    for analysis in results:
+                    for idx, analysis in enumerate(results):
                         if analysis and analysis.opportunity != "WAIT":
                             # Final Filters
                             if analysis.confidence < CONFIDENCE_MIN or analysis.total_score < SCORE_MIN:
@@ -983,8 +992,20 @@ class HybridBot:
                                 continue
                             
                             logger.info(f"  ✅ High-Confidence Signal Found: {analysis.opportunity}")
-                            chart = ChartGenerator.create_chart(self.chart_analyzer.get_full_analysis(self.fetcher.get_multi_timeframe_data(list(INDICES.keys())[results.index(analysis)])), analysis, list(INDICES.values())[results.index(analysis)]['name'])
-                            await self.notifier.send_alert(list(INDICES.values())[results.index(analysis)]['name'], analysis, chart)
+                            
+                            # Fetch data again just for charting (or pass mtf_data through)
+                            # This is a bit inefficient, but simplest to implement post-analysis
+                            instrument_key = list(INDICES.keys())[idx]
+                            symbol = INDICES[instrument_key]['name']
+                            mtf_data_for_chart = self.fetcher.get_multi_timeframe_data(instrument_key)
+                            chart_analysis_for_chart = self.chart_analyzer.get_full_analysis(mtf_data_for_chart)
+                            
+                            if mtf_data_for_chart:
+                                chart = ChartGenerator.create_chart(chart_analysis_for_chart, analysis, symbol)
+                                await self.notifier.send_alert(symbol, analysis, chart)
+                            else:
+                                await self.notifier.send_alert(symbol, analysis, None) # Send without chart
+                            
                             alerts_sent += 1
                         
                     await self.notifier.send_summary(len(INDICES), alerts_sent)
@@ -1014,4 +1035,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
