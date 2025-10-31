@@ -361,7 +361,8 @@ class UpstoxDataFetcher:
         try:
             encoded = urllib.parse.quote(instrument_key)
             to_date = datetime.now(IST).strftime('%Y-%m-%d')
-            from_date = (datetime.now(IST) - timedelta(days=60)).strftime('%Y-%m-%d')
+            # ✅ FIX: Reduced data request from 60 days to 10 days to fix "Invalid date range" error
+            from_date = (datetime.now(IST) - timedelta(days=10)).strftime('%Y-%m-%d')
             
             # ✅ FIX: Changed interval from "15minute" to "1minute" as per API spec
             url = f"{BASE_URL}/v2/historical-candle/{encoded}/1minute/{to_date}/{from_date}"
@@ -1035,5 +1036,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
