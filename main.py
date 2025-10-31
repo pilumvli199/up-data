@@ -956,7 +956,8 @@ class HybridBot:
                 return None
 
             # 5. News Analysis (Optional)
-            news_analysis = self.news_api.analyze_news(symbol, market_news)
+            # ✅ FIX: Called the static method on the correct class (NewsAnalyzer)
+            news_analysis = NewsAnalyzer.analyze_news(symbol, market_news)
 
             # 6. AI Synthesis (The "Brain")
             logger.info(f"  🧠 Sending to AI for synthesis...")
@@ -1036,6 +1037,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
