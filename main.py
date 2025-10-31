@@ -64,7 +64,7 @@ INDICES = {
     },
     "BSE_INDEX|SENSEX": {
         "name": "SENSEX",
-        "expiry_day": 4,  # Friday
+        "expiry_day": 1,  # Friday
         "oi_timeframe": "30min",
         "sector": "INDEX"
     }
